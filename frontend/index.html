@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HireEdge — Interview Intelligence Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/reset.css" />
+  <link rel="stylesheet" href="css/layout.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/results.css" />
+  <link rel="stylesheet" href="css/animations.css" />
+</head>
+<body>
+
+  <!-- ══════ NOISE + GRID OVERLAY ══════ -->
+  <div class="canvas-bg" aria-hidden="true">
+    <div class="grid-overlay"></div>
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+  </div>
+
+  <!-- ══════ NAV ══════ -->
+  <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a class="brand" href="#" onclick="resetToHome()">
+        <span class="brand-box">H</span>
+        <span class="brand-name">HireEdge</span>
+        <span class="brand-ver">v2.0</span>
+      </a>
+      <div class="nav-center" id="navCenter">
+        <span class="nav-tag">#01 Upload</span>
+        <span class="nav-tag">#02 Analyse</span>
+        <span class="nav-tag">#03 Strategise</span>
+        <span class="nav-tag">#04 Outreach</span>
+      </div>
+      <div class="api-pill" id="apiPill">
+        <span class="api-dot" id="apiDot"></span>
+        <span id="apiText">Connecting…</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ══════ HERO ══════ -->
+  <section class="hero" id="heroSection">
+    <div class="hero-left">
+      <div class="hero-eyebrow">
+        <span class="eyebrow-chip">#01 Candidate</span>
+        <span class="eyebrow-chip">#02 HR Intel</span>
+        <span class="eyebrow-chip">#03 Strategy</span>
+        <span class="eyebrow-chip">#04 Outreach</span>
+      </div>
+      <h1 class="hero-h1">
+        Land The<br />
+        <em class="hero-italic">Interview.</em>
+      </h1>
+      <p class="hero-body">Upload two PDFs. Six AI agents analyse, strategise, and write every message you need — powered by Groq and LangChain.</p>
+      <button class="cta-pill" onclick="scrollToApp()">
+        Start for free
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </button>
+      <div class="hero-metrics">
+        <div class="metric"><span class="metric-n">6</span><span class="metric-l">AI Agents</span></div>
+        <div class="metric-sep"></div>
+        <div class="metric"><span class="metric-n">8</span><span class="metric-l">Message Types</span></div>
+        <div class="metric-sep"></div>
+        <div class="metric"><span class="metric-n">~45s</span><span class="metric-l">Avg Runtime</span></div>
+      </div>
+    </div>
+    <div class="hero-right">
+      <div class="hero-card-stack">
+        <div class="hcard hcard-1">
+          <div class="hcard-num">01</div>
+          <div class="hcard-label">Candidate Analyser</div>
+          <div class="hcard-sub">Resume → Selling points + gaps</div>
+        </div>
+        <div class="hcard hcard-2">
+          <div class="hcard-num">02</div>
+          <div class="hcard-label">HR Profiler</div>
+          <div class="hcard-sub">LinkedIn → Intelligence dossier</div>
+        </div>
+        <div class="hcard hcard-3">
+          <div class="hcard-num">03</div>
+          <div class="hcard-label">Alignment Strategist</div>
+          <div class="hcard-sub">Match → Narrative + hooks</div>
+        </div>
+        <div class="hcard hcard-4">
+          <div class="hcard-num">06</div>
+          <div class="hcard-label">Success Analyst</div>
+          <div class="hcard-sub">Score + action plan</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════ APP ══════ -->
+  <main class="app-shell" id="appShell">
+
+    <!-- STEP INDICATOR -->
+    <div class="step-bar" id="stepBar">
+      <div class="step-node active" id="sn1"><span class="sn-ring">1</span><span class="sn-txt">Upload</span></div>
+      <div class="step-wire" id="sw1"></div>
+      <div class="step-node" id="sn2"><span class="sn-ring">2</span><span class="sn-txt">Configure</span></div>
+      <div class="step-wire" id="sw2"></div>
+      <div class="step-node" id="sn3"><span class="sn-ring">3</span><span class="sn-txt">Analyse</span></div>
+      <div class="step-wire" id="sw3"></div>
+      <div class="step-node" id="sn4"><span class="sn-ring">4</span><span class="sn-txt">Results</span></div>
+    </div>
+
+    <!-- INPUT PANEL -->
+    <section class="input-panel" id="inputPanel">
+      <div class="panel-head">
+        <span class="panel-eyebrow">Step 01 — Upload</span>
+        <h2 class="panel-title">Two PDFs.<br/>One conversation.</h2>
+      </div>
+
+      <!-- Drop zones -->
+      <div class="drop-row">
+        <label class="drop-zone" id="dropCandidate" for="fileCand">
+          <input type="file" id="fileCand" accept=".pdf" onchange="handleDrop('candidate',this)" />
+          <div class="drop-inner">
+            <div class="drop-icon" id="iconCand">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </div>
+            <div class="drop-num">01</div>
+            <div class="drop-title">Candidate Resume</div>
+            <div class="drop-hint">PDF · Drag or click</div>
+            <div class="drop-status" id="statusCand">No file selected</div>
+          </div>
+        </label>
+
+        <label class="drop-zone" id="dropHR" for="fileHR">
+          <input type="file" id="fileHR" accept=".pdf" onchange="handleDrop('hr',this)" />
+          <div class="drop-inner">
+            <div class="drop-icon" id="iconHR">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </div>
+            <div class="drop-num">02</div>
+            <div class="drop-title">HR / Hiring Manager</div>
+            <div class="drop-hint">LinkedIn Profile → Save as PDF</div>
+            <div class="drop-status" id="statusHR">No file selected</div>
+          </div>
+        </label>
+      </div>
+
+      <!-- Config row -->
+      <div class="config-strip">
+        <div class="field">
+          <label class="field-lbl">Target Job Role</label>
+          <input class="field-inp" id="jobRole" type="text"
+            placeholder="e.g. Full Stack Developer at Stripe"
+            oninput="checkReady()" />
+        </div>
+        <div class="field field-sm">
+          <label class="field-lbl">Backend URL</label>
+          <input class="field-inp" id="backendUrl" type="text" value="http://localhost:5000" />
+        </div>
+      </div>
+
+      <!-- Model picker -->
+      <div class="model-row">
+        <span class="field-lbl">AI Model — Groq</span>
+        <div class="model-chips" id="modelChips">
+          <button class="mchip active" data-model="llama-3.3-70b-versatile" onclick="pickModel(this)">LLaMA 3.3 70B <span class="mchip-tag">Best</span></button>
+          <button class="mchip" data-model="llama-3.1-8b-instant" onclick="pickModel(this)">LLaMA 3.1 8B <span class="mchip-tag">Fast</span></button>
+          <button class="mchip" data-model="gemma2-9b-it" onclick="pickModel(this)">Gemma 2 9B <span class="mchip-tag">Light</span></button>
+          <button class="mchip" data-model="mixtral-8x7b-32768" onclick="pickModel(this)">Mixtral 8×7B <span class="mchip-tag">Long ctx</span></button>
+        </div>
+      </div>
+
+      <!-- Run button -->
+      <button class="run-btn" id="runBtn" onclick="startAnalysis()" disabled>
+        <span>⚡ Run Intelligence Analysis</span>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </button>
+
+      <!-- Error -->
+      <div class="error-strip" id="errorStrip">
+        <span class="error-icon">⚠</span>
+        <div>
+          <div class="error-head">Analysis Failed</div>
+          <div class="error-body" id="errorBody"></div>
+        </div>
+        <button class="error-reset" onclick="resetUI()">Reset</button>
+      </div>
+    </section>
+
+    <!-- PROGRESS PANEL -->
+    <section class="progress-panel" id="progressPanel">
+      <div class="panel-head">
+        <span class="panel-eyebrow">Step 03 — Running</span>
+        <h2 class="panel-title">Agents working<span class="blink-dots"><span>.</span><span>.</span><span>.</span></span></h2>
+      </div>
+      <div class="prog-track">
+        <div class="prog-fill" id="progFill"></div>
+      </div>
+      <div class="prog-meta">
+        <span id="progCount">0 / 6 agents complete</span>
+        <span id="progPct">0%</span>
+      </div>
+      <div class="agent-board" id="agentBoard"></div>
+    </section>
+
+  </main>
+
+  <!-- ══════ RESULTS SECTION ══════ -->
+  <section class="results-wrap" id="resultsWrap">
+
+    <!-- Results hero banner -->
+    <div class="results-banner">
+      <div class="results-banner-left">
+        <span class="panel-eyebrow">Step 04 — Complete</span>
+        <h2 class="results-title">Intelligence<br/><em>Report Ready</em></h2>
+        <button class="dl-btn" id="dlBtn" onclick="downloadReport()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download Full Report
+        </button>
+      </div>
+      <div class="score-trio" id="scoreTrio">
+        <div class="score-brick">
+          <div class="score-val" id="sc1">—</div>
+          <div class="score-lbl">Connection Rate</div>
+          <div class="score-bar-wrap"><div class="score-bar" id="sb1" style="background:var(--orange)"></div></div>
+        </div>
+        <div class="score-brick">
+          <div class="score-val" id="sc2">—</div>
+          <div class="score-lbl">DM Reply Rate</div>
+          <div class="score-bar-wrap"><div class="score-bar" id="sb2" style="background:var(--lime)"></div></div>
+        </div>
+        <div class="score-brick">
+          <div class="score-val" id="sc3">—</div>
+          <div class="score-lbl">Interview Chance</div>
+          <div class="score-bar-wrap"><div class="score-bar" id="sb3" style="background:var(--purple)"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab strip -->
+    <div class="tab-strip" id="tabStrip">
+      <button class="tab active" onclick="switchTab(this,'tp-candidate')">#01 Candidate</button>
+      <button class="tab" onclick="switchTab(this,'tp-hr')">#02 HR Profile</button>
+      <button class="tab" onclick="switchTab(this,'tp-alignment')">#03 Alignment</button>
+      <button class="tab" onclick="switchTab(this,'tp-roadmap')">#04 Roadmap</button>
+      <button class="tab" onclick="switchTab(this,'tp-messages')">#05 Messages</button>
+      <button class="tab" onclick="switchTab(this,'tp-scorecard')">#06 Scorecard</button>
+    </div>
+
+    <!-- Tab panels -->
+    <div class="tab-body">
+      <div class="tab-panel active" id="tp-candidate"></div>
+      <div class="tab-panel" id="tp-hr"></div>
+      <div class="tab-panel" id="tp-alignment"></div>
+      <div class="tab-panel" id="tp-roadmap"></div>
+      <div class="tab-panel" id="tp-messages"></div>
+      <div class="tab-panel" id="tp-scorecard"></div>
+    </div>
+
+  </section>
+
+  <!-- Toast -->
+  <div class="toast" id="toast">
+    <span id="toastIcon">✅</span>
+    <span id="toastMsg">Done</span>
+  </div>
+
+  <script src="js/state.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
