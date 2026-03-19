@@ -7,7 +7,7 @@
 // }
 
 function getBase() {
-  return (document.getElementById('backendUrl').value || 'https://hire-edge-v2.onrender.com')
+  return (document.getElementById('backendUrl').value || '')
     .trim().replace(/\/$/, '');
 }
 

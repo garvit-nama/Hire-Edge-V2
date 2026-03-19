@@ -40,6 +40,8 @@ from pypdf import PdfReader
 # ── Waitress ───────────────────────────────────────────────────────────────────
 from waitress import serve
 
+from flask import send_from_directory
+
 # ════════════════════════════════════════════════════════════════════════════════
 #  CONFIG
 # ════════════════════════════════════════════════════════════════════════════════
@@ -629,14 +631,22 @@ def run_job(job_id, c_pdf, h_pdf, role, model):
 # ════════════════════════════════════════════════════════════════════════════════
 #  API ROUTES
 # ════════════════════════════════════════════════════════════════════════════════
+# ── Serve Frontend ─────────────────────────────────────────────────────────────
 @app.route("/")
-def index():
-    return jsonify({
-        "name": "HireEdge API",
-        "version": "3.0",
-        "status": "running",
-        "endpoints": ["/health", "/models", "/analyse", "/status/<id>", "/report/<id>"]
-    })
+def serve_frontend():
+    return send_from_directory("../frontend", "index.html")
+
+@app.route("/<path:path>")
+def serve_static(path):
+    # Don't intercept API routes
+    api_routes = ["health", "models", "analyse", "status", "report"]
+    if path.split("/")[0] in api_routes:
+        return jsonify({"error": "Not found"}), 404
+    try:
+        return send_from_directory("../frontend", path)
+    except Exception:
+        return send_from_directory("../frontend", "index.html") 
+
 
 @app.route("/health")
 def health():
