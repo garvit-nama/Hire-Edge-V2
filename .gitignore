@@ -1,0 +1,17 @@
+# Environment — never commit
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+
+# HireEdge runtime folders
+backend/uploads/
+backend/reports/
+
+# Node
+node_modules/
+package-lock.json
