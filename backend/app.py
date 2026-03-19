@@ -629,6 +629,14 @@ def run_job(job_id, c_pdf, h_pdf, role, model):
 # ════════════════════════════════════════════════════════════════════════════════
 #  API ROUTES
 # ════════════════════════════════════════════════════════════════════════════════
+@app.route("/")
+def index():
+    return jsonify({
+        "name": "HireEdge API",
+        "version": "3.0",
+        "status": "running",
+        "endpoints": ["/health", "/models", "/analyse", "/status/<id>", "/report/<id>"]
+    })
 
 @app.route("/health")
 def health():
