@@ -13,14 +13,14 @@ HireEdge is an AI-powered platform that helps job seekers land interviews by ana
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Backend | Python 3.11, Flask, Waitress |
-| Database | SQLite via SQLAlchemy |
-| AI/LLM | Groq API, LangChain, `ChatGroq` |
-| Frontend | Vanilla JS, HTML5, CSS3 (no build step) |
-| Auth | JWT (HS256), bcrypt |
-| PDF | pypdf |
+| Layer | Technology | Hosting |
+|-------|-----------|---------|
+| Backend | Python 3.11, Flask, Waitress | Render |
+| Database | SQLite via SQLAlchemy | Render (ephemeral disk) |
+| AI/LLM | Groq API, LangChain, `ChatGroq` | Groq Cloud |
+| Frontend | Vanilla JS, HTML5, CSS3 (no build step) | Vercel |
+| Auth | JWT (HS256), bcrypt | — |
+| PDF | pypdf | — |
 
 ## Quick Start
 
@@ -57,14 +57,35 @@ python backend/app.py
 
 Open [http://localhost:5000](http://localhost:5000) in your browser.
 
-### Deploy (Heroku)
+## Deployment
 
-```bash
-heroku create your-app-name
-heroku config:set GROQ_API_KEY=your_key
-heroku config:set SECRET_KEY=a-strong-secret
-git push heroku main
-```
+HireEdge uses a split deployment for faster UX:
+
+- **Frontend** → [Vercel](https://vercel.com) (static hosting, instant cold start)
+- **Backend** → [Render](https://render.com) (Flask web service)
+
+### Backend — Render
+
+1. Create a **Web Service** on Render from your repo.
+2. Set:
+   - **Root Directory**: `backend`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `python app.py`
+3. Add environment variables:
+   - `GROQ_API_KEY` — your Groq API key
+   - `SECRET_KEY` — a strong random string
+   - `PYTHON_VERSION` = `3.11.0`
+4. Deploy. Note the URL (e.g. `https://hireedge-backend.onrender.com`).
+
+### Frontend — Vercel
+
+1. Import your repo on [Vercel](https://vercel.com/new).
+2. The `vercel.json` at the repo root auto-configures the `frontend/` directory.
+3. Set environment variable (optional):
+   - `NEXT_PUBLIC_BACKEND_URL` — your Render backend URL
+4. Deploy. Vercel serves the static files with instant cold start — users see the UI while the backend wakes up.
+
+> **Note**: The backend URL is set in a hidden `<input id="backendUrl">` in each HTML page. Update it if your Render URL changes.
 
 ## Project Structure
 
@@ -94,6 +115,7 @@ hireEdge/
 │       └── animations.css
 ├── AGENTS.md
 ├── CLAUDE.md
+├── vercel.json             # Vercel config (frontend/ root)
 └── README.md
 ```
 

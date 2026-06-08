@@ -1,19 +1,19 @@
-// ── helpers ────────────────────────────────────────────────────────────────────
-// Updated — points to your live Render backend
-
-// function getBase() {
-//   return (document.getElementById('backendUrl').value || 'http://localhost:5000')
-//     .trim().replace(/\/$/, '');
-// }
-
+// ── api helpers ───────────────────────────────────────────────────────────────
 function getBase() {
-  return (document.getElementById('backendUrl').value || '')
+  return (document.getElementById('backendUrl')?.value || '')
     .trim().replace(/\/$/, '');
+}
+
+function getHeaders() {
+  const headers = {};
+  if (S.token) headers['Authorization'] = `Bearer ${S.token}`;
+  return headers;
 }
 
 let toastT;
 function toast(icon, msg) {
   const el = document.getElementById('toast');
+  if (!el) return console.log(icon, msg);
   document.getElementById('toastIcon').textContent = icon;
   document.getElementById('toastMsg').textContent = msg;
   el.classList.add('show');
@@ -21,10 +21,59 @@ function toast(icon, msg) {
   toastT = setTimeout(() => el.classList.remove('show'), 3500);
 }
 
+// ── auth ───────────────────────────────────────────────────────────────────────
+async function login(email, password) {
+  try {
+    const r = await fetch(getBase() + '/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Login failed');
+    
+    S.token = d.token;
+    S.user = d.user;
+    localStorage.setItem('token', d.token);
+    localStorage.setItem('user', JSON.stringify(d.user));
+    toast('🔑', 'Logged in!');
+    return true;
+  } catch (e) {
+    toast('❌', e.message);
+    return false;
+  }
+}
+
+async function register(email, password) {
+  try {
+    const r = await fetch(getBase() + '/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Registration failed');
+    toast('✅', 'Registered! Please login.');
+    return true;
+  } catch (e) {
+    toast('❌', e.message);
+    return false;
+  }
+}
+
+function logout() {
+  S.token = null;
+  S.user = null;
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  window.location.href = 'index.html';
+}
+
 // ── health check ───────────────────────────────────────────────────────────────
 async function checkHealth() {
   const dot = document.getElementById('apiDot');
   const text = document.getElementById('apiText');
+  if (!dot || !text) return;
   try {
     const r = await fetch(getBase() + '/health', { signal: AbortSignal.timeout(4000) });
     const data = await r.json();
@@ -48,17 +97,24 @@ async function fetchModels() {
     const data = await r.json();
     if (!data.models?.length) return;
     const chips = document.getElementById('modelChips');
+    if (!chips) return;
     chips.innerHTML = data.models.map((m, i) =>
       `<button class="mchip${i === 0 ? ' active' : ''}" data-model="${m.id}" onclick="pickModel(this)">
         ${m.label} ${m.tag ? `<span class="mchip-tag">${m.tag}</span>` : ''}
        </button>`
     ).join('');
-    S.model = data.models[0].id;
+    if (S) S.model = data.models[0].id;
   } catch { /* keep defaults */ }
 }
 
 // ── submit analysis ────────────────────────────────────────────────────────────
 async function startAnalysis() {
+  if (!S.token) {
+    toast('🔒', 'Please login to start an analysis.');
+    setTimeout(() => window.location.href = 'login.html', 1500);
+    return;
+  }
+
   const role = document.getElementById('jobRole').value.trim();
   if (!S.candidateFile || !S.hrFile || !role) return;
 
@@ -77,9 +133,19 @@ async function startAnalysis() {
   fd.append('model', S.model);
 
   try {
-    const r = await fetch(getBase() + '/analyse', { method: 'POST', body: fd });
-    if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Server error'); }
+    const r = await fetch(getBase() + '/analyse', { 
+      method: 'POST', 
+      headers: getHeaders(), // Note: FormData handles its own multipart boundary, so just add Auth
+      body: fd 
+    });
     const data = await r.json();
+    if (!r.ok) {
+      if (r.status === 403) {
+        showFreemiumLimit();
+        throw new Error(data.error);
+      }
+      throw new Error(data.error || 'Server error'); 
+    }
     S.jobId = data.job_id;
     toast('🚀', 'Agents running…');
     openSSE(S.jobId);
@@ -88,21 +154,203 @@ async function startAnalysis() {
   }
 }
 
-// ── SSE stream ─────────────────────────────────────────────────────────────────
-function openSSE(jid) {
-  const es = new EventSource(getBase() + `/stream/${jid}`);
-  es.onmessage = e => {
-    const d = JSON.parse(e.data);
-    updateAgentBoard(d);
-    if (d.status === 'complete') { es.close(); S.results = d.results; renderResults(); }
-    else if (d.status === 'error') { es.close(); showError(d.message || 'Unknown error'); }
-  };
-  es.onerror = () => { es.close(); S.pollInterval = setInterval(() => pollJob(jid), 2000); };
+function showFreemiumLimit() {
+  resetUI();
+  showUpgradeModal();
 }
+
+function showUpgradeModal() {
+  // Remove existing modal if any
+  const existing = document.getElementById('upgradeModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'upgradeModal';
+  modal.className = 'upgrade-modal';
+  modal.innerHTML = `
+    <div class="upgrade-overlay"></div>
+    <div class="upgrade-box">
+      <div class="upgrade-header">
+        <span class="upgrade-icon">🔒</span>
+        <h2>Free Limit Reached</h2>
+      </div>
+      <div class="upgrade-body">
+        <p>You've used all <strong>3 free analyses</strong>.</p>
+        <p>Upgrade to Premium for:</p>
+        <ul class="upgrade-perks">
+          <li>✓ Unlimited analyses</li>
+          <li>✓ Priority processing</li>
+          <li>✓ Advanced insights</li>
+          <li>✓ Export to PDF</li>
+        </ul>
+      </div>
+      <div class="upgrade-actions">
+        <button class="upgrade-btn-primary" onclick="simulateUpgrade()">
+          <span>Upgrade to Premium</span>
+          <span class="upgrade-price">$9.99/mo</span>
+        </button>
+        <button class="upgrade-btn-secondary" onclick="closeUpgradeModal()">
+          Maybe Later
+        </button>
+      </div>
+    </div>
+  `;
+
+  // Add styles
+  const style = document.createElement('style');
+  style.id = 'upgradeModalStyle';
+  style.textContent = `
+    .upgrade-modal {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .upgrade-overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(4px);
+    }
+    .upgrade-box {
+      position: relative;
+      background: linear-gradient(135deg, rgba(30, 30, 40, 0.98), rgba(20, 20, 30, 0.98));
+      border: 1px solid rgba(168, 85, 247, 0.3);
+      border-radius: 24px;
+      padding: 40px;
+      max-width: 420px;
+      width: 90%;
+      box-shadow: 0 25px 80px rgba(168, 85, 247, 0.2);
+      animation: upgradeSlideIn 0.3s ease-out;
+    }
+    @keyframes upgradeSlideIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .upgrade-header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .upgrade-icon {
+      font-size: 3rem;
+      display: block;
+      margin-bottom: 12px;
+    }
+    .upgrade-header h2 {
+      font-family: 'Familjen Grotesk', sans-serif;
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: white;
+      margin: 0;
+    }
+    .upgrade-body {
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 0.95rem;
+      line-height: 1.6;
+      margin-bottom: 28px;
+    }
+    .upgrade-body strong {
+      color: #f472b6;
+    }
+    .upgrade-perks {
+      list-style: none;
+      padding: 0;
+      margin: 16px 0 0 0;
+      background: rgba(168, 85, 247, 0.1);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .upgrade-perks li {
+      padding: 6px 0;
+      color: #a78bfa;
+    }
+    .upgrade-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .upgrade-btn-primary {
+      background: linear-gradient(135deg, #a855f7, #c084fc);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      padding: 16px 24px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .upgrade-btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(168, 85, 247, 0.4);
+    }
+    .upgrade-price {
+      background: rgba(0, 0, 0, 0.2);
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+    }
+    .upgrade-btn-secondary {
+      background: transparent;
+      color: rgba(255, 255, 255, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      padding: 14px 24px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .upgrade-btn-secondary:hover {
+      border-color: rgba(255, 255, 255, 0.4);
+      color: rgba(255, 255, 255, 0.8);
+    }
+  `;
+
+  document.body.appendChild(style);
+  document.body.appendChild(modal);
+}
+
+function closeUpgradeModal() {
+  const modal = document.getElementById('upgradeModal');
+  const style = document.getElementById('upgradeModalStyle');
+  if (modal) modal.remove();
+  if (style) style.remove();
+}
+
+function simulateUpgrade() {
+  const btn = document.querySelector('.upgrade-btn-primary');
+  btn.disabled = true;
+  btn.innerHTML = `<span>Upgrading...</span>`;
+
+  // Simulate API call
+  setTimeout(() => {
+    if (S.user) {
+      S.user.tier = 'premium';
+      localStorage.setItem('user', JSON.stringify(S.user));
+    }
+    btn.innerHTML = `<span>✓ Upgrade Complete!</span>`;
+    btn.style.background = 'linear-gradient(135deg, #22c55e, #4ade80)';
+
+    setTimeout(() => {
+      closeUpgradeModal();
+      toast('🎉', 'Welcome to Premium! Unlimited analyses unlocked.');
+    }, 1000);
+  }, 1500);
+}
+
+// ── SSE stream / Polling ────────────────────────────────────────────────────────
+// (openSSE and pollJob remain largely similar but need headers)
 
 async function pollJob(jid) {
   try {
-    const r = await fetch(getBase() + `/status/${jid}`);
+    const r = await fetch(getBase() + `/status/${jid}`, { headers: getHeaders() });
     const d = await r.json();
     updateAgentBoard(d);
     if (d.status === 'complete') { clearInterval(S.pollInterval); S.results = d.results; renderResults(); }

@@ -35,10 +35,11 @@
         <span class="brand-ver">v2.0</span>
       </a>
       <div class="nav-center" id="navCenter">
-        <span class="nav-tag">#01 Upload</span>
-        <span class="nav-tag">#02 Analyse</span>
-        <span class="nav-tag">#03 Strategise</span>
-        <span class="nav-tag">#04 Outreach</span>
+        <span class="nav-tag">Agentic Analysis</span>
+      </div>
+      <div class="nav-right" id="userNav">
+        <!-- populated by main.js -->
+        <a href="login.html" class="auth-link">Login</a>
       </div>
       <div class="api-pill" id="apiPill">
         <span class="api-dot" id="apiDot"></span>
@@ -165,10 +166,7 @@
           <input class="field-inp" id="jobRole" type="text" placeholder="e.g. Full Stack Developer at Stripe"
             oninput="checkReady()" />
         </div>
-        <div class="field field-sm">
-          <label class="field-lbl">Backend URL</label>
-          <input class="field-inp" id="backendUrl" type="text" value="" placeholder="Auto-detected" />
-        </div>
+        <input type="hidden" id="backendUrl" value="https://hireedge-backend.onrender.com" />
       </div>
 
       <!-- Model picker -->

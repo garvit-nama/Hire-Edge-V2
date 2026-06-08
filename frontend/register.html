@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Register — HireEdge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/reset.css" />
+  <link rel="stylesheet" href="css/layout.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/animations.css" />
+  <style>
+    .auth-container {
+      max-width: 400px;
+      margin: 100px auto;
+      padding: 40px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      backdrop-filter: blur(10px);
+    }
+    .auth-title { font-size: 2rem; margin-bottom: 2rem; text-align: center; font-family: 'Familjen Grotesk'; }
+    .form-group { margin-bottom: 1.5rem; }
+    .form-group label { display: block; margin-bottom: 0.5rem; font-size: 0.9rem; opacity: 0.7; }
+    .form-group input { width: 100%; padding: 12px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: white; }
+    .auth-btn { width: 100%; padding: 14px; background: var(--purple, #a855f7); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; transition: all 0.2s; }
+    .auth-btn:hover { opacity: 0.9; transform: translateY(-2px); }
+    .auth-footer { margin-top: 2rem; text-align: center; font-size: 0.9rem; opacity: 0.7; }
+    .auth-footer a { color: var(--purple, #a855f7); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="canvas-bg">
+    <div class="grid-overlay"></div>
+    <div class="orb orb-b"></div>
+  </div>
+
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="index.html">
+        <span class="brand-box">H</span>
+        <span class="brand-name">HireEdge</span>
+      </a>
+    </div>
+  </nav>
+
+  <div class="auth-container">
+    <h1 class="auth-title">Create Account</h1>
+    <form id="registerForm">
+      <div class="form-group">
+        <label>Email Address</label>
+        <input type="email" id="email" required placeholder="name@company.com">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="password" required placeholder="Min 8 characters">
+      </div>
+      <button type="submit" class="auth-btn" id="regBtn">Create Free Account</button>
+    </form>
+    <div class="auth-footer">
+      Already have an account? <a href="login.html">Sign in here</a>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">
+    <span id="toastIcon">✅</span>
+    <span id="toastMsg">Done</span>
+  </div>
+
+  <input type="hidden" id="backendUrl" value="https://hireedge-backend.onrender.com" />
+
+  <script src="js/state.js"></script>
+  <script src="js/api.js"></script>
+  <script>
+    document.getElementById('registerForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const b = document.getElementById('regBtn');
+      b.disabled = true; b.textContent = 'Creating account...';
+      
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      
+      const success = await register(email, password);
+      if (success) {
+        setTimeout(() => window.location.href = 'login.html', 2000);
+      } else {
+        b.disabled = false; b.textContent = 'Create Free Account';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -158,6 +158,30 @@ function resetUI() {
   if (S.pollInterval) clearInterval(S.pollInterval);
 }
 
+// ── User UI ───────────────────────────────────────────────────────────────────
+function updateUserUI() {
+  const navContainer = document.getElementById('userNav');
+  if (!navContainer) return;
+
+  if (S.user) {
+    navContainer.innerHTML = `
+      <div class="user-pill">
+        <span class="user-email">${S.user.email}</span>
+        <div class="user-actions">
+          <a href="dashboard.html" class="user-link">History</a>
+          <button onclick="logout()" class="user-logout">Logout</button>
+        </div>
+      </div>
+    `;
+  } else {
+    navContainer.innerHTML = `
+      <a href="login.html" class="auth-link">Login</a>
+      <a href="register.html" class="auth-pill">Sign Up</a>
+    `;
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────────
 checkHealth();
+updateUserUI();
 setInterval(checkHealth, 20000);

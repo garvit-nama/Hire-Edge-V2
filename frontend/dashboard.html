@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard — HireEdge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/reset.css" />
+  <link rel="stylesheet" href="css/layout.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/results.css" />
+  <link rel="stylesheet" href="css/animations.css" />
+  <style>
+    .dash-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 20px;
+      margin-top: 40px;
+    }
+    .report-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 24px;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .report-card:hover { 
+      background: rgba(255, 255, 255, 0.06); 
+      border-color: var(--purple, #a855f7);
+      transform: translateY(-5px);
+    }
+    .report-date { font-size: 0.8rem; opacity: 0.5; margin-bottom: 8px; font-family: 'JetBrains Mono'; }
+    .report-role { font-family: 'Familjen Grotesk'; font-size: 1.25rem; font-weight: 600; margin-bottom: 16px; line-height: 1.2; }
+    .report-status { 
+      display: inline-flex; 
+      align-items: center; 
+      gap: 6px; 
+      font-size: 0.75rem; 
+      padding: 4px 10px; 
+      border-radius: 20px; 
+      background: rgba(255,255,255,0.1);
+    }
+    .s-complete { background: rgba(34, 197, 94, 0.1); color: #4ade80; }
+    .s-error { background: rgba(239, 68, 68, 0.1); color: #f87171; }
+    
+    .view-btn {
+      margin-top: 24px;
+      padding: 10px;
+      width: 100%;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      color: white;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: 0.2s;
+    }
+    .view-btn:hover { background: var(--purple, #a855f7); border-color: var(--purple); }
+    
+    .empty-state { text-align: center; margin-top: 100px; opacity: 0.6; }
+    .page-title { margin-top: 60px; font-size: 2.5rem; font-family: 'Familjen Grotesk'; }
+  </style>
+</head>
+<body>
+  <div class="canvas-bg">
+    <div class="grid-overlay"></div>
+    <div class="orb orb-a"></div>
+  </div>
+
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="index.html">
+        <span class="brand-box">H</span>
+        <span class="brand-name">HireEdge</span>
+      </a>
+      <div class="nav-right" id="userNav">
+        <!-- Auth state handled by main.js -->
+      </div>
+    </div>
+  </nav>
+
+  <main class="app-shell">
+    <header class="page-header">
+      <h1 class="page-title">Intelligence Archive</h1>
+      <p style="opacity: 0.6; margin-top: 12px;">Review your past agentic career strategies.</p>
+    </header>
+
+    <div id="reportsGrid" class="dash-grid">
+      <!-- Cards injected here -->
+      <div class="empty-state">Fetching your reports...</div>
+    </div>
+  </main>
+
+  <div class="toast" id="toast">
+    <span id="toastIcon">✅</span>
+    <span id="toastMsg">Done</span>
+  </div>
+
+  <input type="hidden" id="backendUrl" value="https://hireedge-backend.onrender.com" />
+
+  <script src="js/state.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/main.js"></script>
+  <script>
+    async function fetchHistory() {
+      if (!S.token) {
+        window.location.href = 'login.html';
+        return;
+      }
+
+      try {
+        const r = await fetch(getBase() + '/api/my-reports', { headers: getHeaders() });
+        const reports = await r.json();
+        
+        const grid = document.getElementById('reportsGrid');
+        if (!reports || reports.length === 0) {
+          grid.innerHTML = `<div class="empty-state">No reports found. Start an analysis to see magic happen.</div>`;
+          return;
+        }
+
+        grid.innerHTML = reports.map(r => `
+          <div class="report-card">
+            <div class="report-date">${new Date(r.created_at).toLocaleDateString()}</div>
+            <div class="report-role">${r.job_role}</div>
+            <div class="report-status s-${r.status}">${r.status.toUpperCase()}</div>
+            <button class="view-btn" onclick="viewDetails('${r.id}')">
+              ${r.status === 'complete' ? 'View Analysis' : 'Retry'}
+            </button>
+          </div>
+        `).join('');
+
+      } catch (e) {
+        toast('❌', 'Failed to load history');
+      }
+    }
+
+    function viewDetails(id) {
+       // For now, we simple store the selected ID and go back to index 
+       // where index.html could potentially show the results tab
+       // Or we can add a simple modal here.
+       // Let's keep it simple: redirect to index with #results=[id]
+       window.location.href = `index.html?report=${id}`;
+    }
+
+    document.addEventListener('DOMContentLoaded', fetchHistory);
+  </script>
+</body>
+</html>

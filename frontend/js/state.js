@@ -4,5 +4,7 @@ const S = {
   model:         'llama-3.3-70b-versatile',
   jobId:         null,
   pollInterval:  null,
-  results:       {}
+  results:       {},
+  user:          JSON.parse(localStorage.getItem('user')) || null,
+  token:         localStorage.getItem('token') || null
 };

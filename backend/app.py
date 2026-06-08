@@ -29,6 +29,11 @@ from pathlib import Path
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
+import bcrypt
+import jwt
+from functools import wraps
+import datetime
+
 # ── LangChain 1.2.x compatible imports ────────────────────────────────────────
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -42,14 +47,49 @@ from waitress import serve
 
 from flask import send_from_directory
 
+# ── Models ─────────────────────────────────────────────────────────────────────
+from models import db, User, Job
+
 # ════════════════════════════════════════════════════════════════════════════════
 #  CONFIG
 # ════════════════════════════════════════════════════════════════════════════════
 app = Flask(__name__)
 CORS(app, origins="*")
 
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'hireedge-super-secret-key')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///hireedge.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
+
+with app.app_context():
+    db.create_all()
+
 UPLOAD_FOLDER  = Path("uploads");  UPLOAD_FOLDER.mkdir(exist_ok=True)
 REPORTS_FOLDER = Path("reports");  REPORTS_FOLDER.mkdir(exist_ok=True)
+
+# ── Auth Middleware ────────────────────────────────────────────────────────────
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            parts = request.headers['Authorization'].split()
+            if len(parts) == 2 and parts[0] == 'Bearer':
+                token = parts[1]
+        
+        if not token:
+            return jsonify({'error': 'Token is missing!'}), 401
+            
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = User.query.filter_by(id=data['user_id']).first()
+        except Exception as e:
+            return jsonify({'error': 'Token is invalid!'}), 401
+            
+        return f(current_user, *args, **kwargs)
+    return decorated
+
 
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 
@@ -577,7 +617,7 @@ AGENT_META = [
 #  BACKGROUND JOB RUNNER
 # ════════════════════════════════════════════════════════════════════════════════
 
-def run_job(job_id, c_pdf, h_pdf, role, model):
+def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
     job = jobs[job_id]
     try:
         job["status"]  = "extracting"
@@ -613,6 +653,20 @@ def run_job(job_id, c_pdf, h_pdf, role, model):
         job["status"]  = "complete"
         job["message"] = "Analysis complete."
 
+        # Save to database
+        with app.app_context():
+            new_job = Job(
+                id=job_id,
+                user_id=user_id,
+                job_role=role,
+                model=model,
+                status='complete',
+                report_content=report,
+                results_json=json.dumps(job["results"])
+            )
+            db.session.add(new_job)
+            db.session.commit()
+
     except Exception as e:
         job["status"]  = "error"
         job["message"] = str(e)
@@ -620,6 +674,17 @@ def run_job(job_id, c_pdf, h_pdf, role, model):
             if ag["status"] == "running":
                 ag["status"] = "error"
                 ag["error"]  = str(e)
+        
+        with app.app_context():
+            new_job = Job(
+                id=job_id,
+                user_id=user_id,
+                job_role=role,
+                model=model,
+                status='error',
+            )
+            db.session.add(new_job)
+            db.session.commit()
     finally:
         try:
             c_pdf.unlink(missing_ok=True)
@@ -633,20 +698,6 @@ def run_job(job_id, c_pdf, h_pdf, role, model):
 # ════════════════════════════════════════════════════════════════════════════════
 # ── Serve Frontend ─────────────────────────────────────────────────────────────
 @app.route("/")
-def serve_frontend():
-    return send_from_directory("../frontend", "index.html")
-
-@app.route("/<path:path>")
-def serve_static(path):
-    # Don't intercept API routes
-    api_routes = ["health", "models", "analyse", "status", "report"]
-    if path.split("/")[0] in api_routes:
-        return jsonify({"error": "Not found"}), 404
-    try:
-        return send_from_directory("../frontend", path)
-    except Exception:
-        return send_from_directory("../frontend", "index.html") 
-
 
 @app.route("/health")
 def health():
@@ -662,8 +713,73 @@ def health():
 def list_models():
     return jsonify({"models": AVAILABLE_MODELS})
 
+# ── Auth Routes ───────────────────────────────────────────────────────────────
+
+@app.route("/api/register", methods=["POST"])
+def register():
+    data = request.get_json()
+    if not data or not data.get('email') or not data.get('password'):
+        return jsonify({'error': 'Email and password required'}), 400
+        
+    if User.query.filter_by(email=data['email']).first():
+        return jsonify({'error': 'User already exists'}), 400
+        
+    hashed_password = bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    
+    new_user = User(email=data['email'], password_hash=hashed_password)
+    db.session.add(new_user)
+    db.session.commit()
+    
+    return jsonify({'message': 'User created successfully!'}), 201
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    if not data or not data.get('email') or not data.get('password'):
+        return jsonify({'error': 'Email and password required'}), 400
+        
+    user = User.query.filter_by(email=data['email']).first()
+    
+    if not user or not bcrypt.checkpw(data['password'].encode('utf-8'), user.password_hash.encode('utf-8')):
+        return jsonify({'error': 'Invalid credentials'}), 401
+        
+    token = jwt.encode({
+        'user_id': user.id,
+        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+    }, app.config['SECRET_KEY'], algorithm="HS256")
+    
+    return jsonify({
+        'token': token,
+        'user': {'email': user.email, 'id': user.id, 'tier': user.subscription_tier}
+    })
+
+@app.route("/api/me", methods=["GET"])
+@token_required
+def get_me(current_user):
+    return jsonify({
+        'email': current_user.email,
+        'tier': current_user.subscription_tier,
+        'free_analyses_used': current_user.free_analyses_used
+    })
+
+@app.route("/api/my-reports", methods=["GET"])
+@token_required
+def get_my_reports(current_user):
+    reports = Job.query.filter_by(user_id=current_user.id).all()
+    return jsonify([{
+        'id': r.id,
+        'job_role': r.job_role,
+        'status': r.status,
+        'created_at': r.created_at.isoformat()
+    } for r in reports])
+
 @app.route("/analyse", methods=["POST"])
-def analyse():
+@token_required
+def analyse(current_user):
+    # Freemium Check
+    if current_user.subscription_tier == 'free' and current_user.free_analyses_used >= 3:
+        return jsonify({"error": "Free limit reached. Please upgrade to premium."}), 403
+
     if "candidate_pdf" not in request.files or "hr_pdf" not in request.files:
         return jsonify({"error": "Both candidate_pdf and hr_pdf required."}), 400
     role = request.form.get("job_role", "").strip()
@@ -675,6 +791,12 @@ def analyse():
     h_path = UPLOAD_FOLDER / f"{jid}_hr.pdf"
     request.files["candidate_pdf"].save(c_path)
     request.files["hr_pdf"].save(h_path)
+    
+    # Increment free use
+    if current_user.subscription_tier == 'free':
+        current_user.free_analyses_used += 1
+        db.session.commit()
+
     jobs[jid] = {
         "id": jid, "status": "queued", "message": "Queued.",
         "progress": 0, "job_role": role, "model": model,
@@ -682,14 +804,39 @@ def analyse():
         "results": {}, "report": "",
     }
     threading.Thread(
-        target=run_job, args=(jid, c_path, h_path, role, model), daemon=True
+        target=run_job, args=(jid, current_user.id, c_path, h_path, role, model), daemon=True
     ).start()
     return jsonify({"job_id": jid, "status": "queued"})
 
+
 @app.route("/status/<jid>")
-def job_status(jid):
+@token_required
+def job_status(current_user, jid):
+    # Check if job belongs to user
+    job_db = Job.query.filter_by(id=jid, user_id=current_user.id).first()
+    
+    # Check in-memory first (for active jobs)
     job = jobs.get(jid)
-    if not job: return jsonify({"error": "Not found."}), 404
+    
+    if not job and not job_db:
+        return jsonify({"error": "Not found or access denied."}), 404
+        
+    if not job:
+        # Load from DB if not in memory
+        resp = {
+            "id": job_db.id,
+            "status": job_db.status,
+            "message": "Loaded from archive.",
+            "progress": 6 if job_db.status == 'complete' else 0,
+            "job_role": job_db.job_role,
+            "model": job_db.model,
+            "agents": [] # History view doesn't need full agent status usually
+        }
+        if job_db.status == 'complete' and job_db.results_json:
+            resp["results"] = json.loads(job_db.results_json)
+        return jsonify(resp)
+
+    # Returning in-memory job status
     resp = {k: job[k] for k in ("id","status","message","progress","job_role","model")}
     resp["agents"] = [
         {"id":a["id"],"name":a["name"],"label":a["label"],
@@ -701,11 +848,13 @@ def job_status(jid):
     return jsonify(resp)
 
 @app.route("/report/<jid>")
-def download_report(jid):
-    job = jobs.get(jid)
-    if not job: return jsonify({"error": "Not found."}), 404
-    if job["status"] != "complete": return jsonify({"error": "Not ready."}), 202
-    return Response(job["report"], mimetype="text/plain",
+@token_required
+def download_report(current_user, jid):
+    job_db = Job.query.filter_by(id=jid, user_id=current_user.id).first()
+    if not job_db or job_db.status != "complete": 
+        return jsonify({"error": "Not found or not ready."}), 404
+    
+    return Response(job_db.report_content, mimetype="text/plain",
         headers={"Content-Disposition": f"attachment; filename=hireedge_{jid[:8]}.txt"})
 
 
@@ -714,9 +863,10 @@ def download_report(jid):
 # ════════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
     print("\n" + "=" * 58)
-    print("  HireEdge  —  http://localhost:5000")
+    print(f"  HireEdge  —  http://0.0.0.0:{port}")
     print("  Server  :  Waitress (Windows-compatible)")
-    print("  Health  :  http://localhost:5000/health")
+    print(f"  Health  :  http://0.0.0.0:{port}/health")
     print("=" * 58 + "\n")
-    serve(app, host="0.0.0.0", port=5000, threads=4)
+    serve(app, host="0.0.0.0", port=port, threads=4)
