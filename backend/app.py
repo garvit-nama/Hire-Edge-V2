@@ -944,6 +944,20 @@ def get_me(current_user):
         'free_analyses_used': current_user.free_analyses_used
     })
 
+@app.route("/api/upgrade", methods=["POST"])
+@token_required
+def upgrade_user(current_user):
+    try:
+        current_user.subscription_tier = 'premium'
+        db.session.commit()
+        return jsonify({
+            'message': 'Upgraded to premium successfully!',
+            'tier': current_user.subscription_tier
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
 @app.route("/api/my-reports", methods=["GET"])
 @token_required
 def get_my_reports(current_user):

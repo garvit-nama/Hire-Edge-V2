@@ -269,27 +269,7 @@ function applyTruncationEffect() {
   }
 }
 
-function showUpgradeModal() {
-  if (document.querySelector('.upgrade-modal-overlay')) return; // Already shown
-  
-  const overlay = document.createElement('div');
-  overlay.className = 'upgrade-modal-overlay';
-  overlay.onclick = () => { overlay.remove(); modal.remove(); };
-  
-  const modal = document.createElement('div');
-  modal.className = 'upgrade-modal';
-  modal.innerHTML = `
-    <h2>🚀 Unlock Full Analysis</h2>
-    <p>Upgrade to Premium to see complete agent insights, full messaging strategies, and detailed roadmaps.</p>
-    <div class="upgrade-modal-buttons">
-      <button class="primary" onclick="this.closest('.upgrade-modal').parentElement.querySelector('.upgrade-modal-overlay').remove(); this.closest('.upgrade-modal').remove();">Go Premium</button>
-      <button class="secondary" onclick="this.closest('.upgrade-modal').parentElement.querySelector('.upgrade-modal-overlay').remove(); this.closest('.upgrade-modal').remove();">Maybe Later</button>
-    </div>
-  `;
-  
-  document.body.appendChild(overlay);
-  document.body.appendChild(modal);
-}
+
 
 function copyMsg(btn) {
   const card = btn.closest('.msg-card');

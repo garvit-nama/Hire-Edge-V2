@@ -343,8 +343,15 @@ function simulateUpgrade() {
   btn.disabled = true;
   btn.innerHTML = `<span>Upgrading...</span>`;
 
-  // Simulate API call
-  setTimeout(() => {
+  fetch(getBase() + '/api/upgrade', {
+    method: 'POST',
+    headers: getHeaders()
+  })
+  .then(r => {
+    if (!r.ok) throw new Error('Upgrade request failed');
+    return r.json();
+  })
+  .then(data => {
     if (S.user) {
       S.user.tier = 'premium';
       localStorage.setItem('user', JSON.stringify(S.user));
@@ -355,8 +362,17 @@ function simulateUpgrade() {
     setTimeout(() => {
       closeUpgradeModal();
       toast('🎉', 'Welcome to Premium! Unlimited analyses unlocked.');
+      updateUserUI();
+      if (document.getElementById('resultsWrap').classList.contains('show')) {
+        window.location.reload();
+      }
     }, 1000);
-  }, 1500);
+  })
+  .catch(err => {
+    btn.disabled = false;
+    btn.innerHTML = `<span>Upgrade to Premium</span>`;
+    toast('❌', 'Upgrade failed: ' + err.message);
+  });
 }
 
 // ── WebSocket Real-time Updates (Phase 5) ──────────────────────────────────────
