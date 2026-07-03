@@ -1,3 +1,6 @@
+let _user = null;
+try { _user = JSON.parse(localStorage.getItem('user')); } catch { _user = null; }
+
 const S = {
   candidateFile: null,
   hrFile:        null,
@@ -5,6 +8,7 @@ const S = {
   jobId:         null,
   pollInterval:  null,
   results:       {},
-  user:          JSON.parse(localStorage.getItem('user')) || null,
+  jobMetadata:   {},  // Phase 3-4: Store is_truncated, analysis_number, etc.
+  user:          _user,
   token:         localStorage.getItem('token') || null
 };

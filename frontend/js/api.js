@@ -1,7 +1,11 @@
 // ── api helpers ───────────────────────────────────────────────────────────────
 function getBase() {
-  return (document.getElementById('backendUrl')?.value || '')
-    .trim().replace(/\/$/, '');
+  const el = document.getElementById('backendUrl');
+  if (el?.value?.trim()) return el.value.trim().replace(/\/$/, '');
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+    return 'http://localhost:5000';
+  }
+  return 'https://hireedge-backend.onrender.com';
 }
 
 function getHeaders() {
@@ -148,7 +152,17 @@ async function startAnalysis() {
     }
     S.jobId = data.job_id;
     toast('🚀', 'Agents running…');
-    openSSE(S.jobId);
+    
+    // Phase 5: Initialize WebSocket for real-time updates
+    initWebSocket();
+    if (wsConnected && socket) {
+      socket.emit('join_job', { job_id: S.jobId });
+    } else {
+      // Fallback to polling if WebSocket not available
+      S.pollInterval = setInterval(() => pollJob(S.jobId), 2000);
+    }
+    
+    pollJob(S.jobId);
   } catch (e) {
     showError(e.message);
   }
@@ -345,24 +359,125 @@ function simulateUpgrade() {
   }, 1500);
 }
 
+// ── WebSocket Real-time Updates (Phase 5) ──────────────────────────────────────
+let socket = null;
+let wsConnected = false;
+
+function initWebSocket() {
+  if (socket) return; // Already initialized
+  
+  try {
+    // Import socket.io client dynamically or load from CDN
+    // For now, check if Socket.IO is available globally
+    if (typeof io === 'undefined') {
+      console.warn('Socket.IO client not available. Will use polling fallback.');
+      return;
+    }
+    
+    socket = io(getBase(), {
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      reconnectionAttempts: 5,
+      transports: ['websocket', 'polling']
+    });
+    
+    socket.on('connect', () => {
+      wsConnected = true;
+      console.log('✅ WebSocket connected');
+      if (S.jobId) {
+        socket.emit('join_job', { job_id: S.jobId });
+      }
+    });
+    
+    socket.on('disconnect', () => {
+      wsConnected = false;
+      console.log('❌ WebSocket disconnected, falling back to polling');
+      // Fallback to polling if disconnected
+      if (S.jobId && !S.pollInterval) {
+        S.pollInterval = setInterval(() => pollJob(S.jobId), 2000);
+      }
+    });
+    
+    socket.on('job_status', (data) => {
+      // Real-time job status update
+      console.log('📍 WebSocket job_status:', data);
+      updateAgentBoard(data);
+      
+      // Store metadata for freemium truncation
+      if (data.is_truncated !== undefined) {
+        S.jobMetadata = S.jobMetadata || {};
+        S.jobMetadata.is_truncated = data.is_truncated;
+      }
+      
+      if (data.status === 'complete') {
+        clearInterval(S.pollInterval);
+        S.results = data.results;
+        S.jobMetadata = S.jobMetadata || {};
+        S.jobMetadata.is_truncated = data.is_truncated || false;
+        renderResults();
+      } else if (data.status === 'error') {
+        clearInterval(S.pollInterval);
+        showError(data.message);
+      }
+    });
+    
+    socket.on('error', (err) => {
+      console.error('WebSocket error:', err);
+      // Fallback to polling
+      if (!S.pollInterval && S.jobId) {
+        S.pollInterval = setInterval(() => pollJob(S.jobId), 2000);
+      }
+    });
+    
+  } catch (err) {
+    console.error('Failed to initialize WebSocket:', err);
+  }
+}
+
 // ── SSE stream / Polling ────────────────────────────────────────────────────────
-// (openSSE and pollJob remain largely similar but need headers)
+// (pollJob provides fallback when WebSocket is unavailable or disconnects)
 
 async function pollJob(jid) {
   try {
     const r = await fetch(getBase() + `/status/${jid}`, { headers: getHeaders() });
     const d = await r.json();
     updateAgentBoard(d);
-    if (d.status === 'complete') { clearInterval(S.pollInterval); S.results = d.results; renderResults(); }
-    else if (d.status === 'error') { clearInterval(S.pollInterval); showError(d.message); }
-  } catch (e) { clearInterval(S.pollInterval); showError('Lost connection: ' + e.message); }
+    
+    // Phase 3-4: Store metadata for freemium truncation
+    if (d.is_truncated !== undefined) {
+      S.jobMetadata = S.jobMetadata || {};
+      S.jobMetadata.is_truncated = d.is_truncated;
+    }
+    
+    if (d.status === 'complete') { 
+      clearInterval(S.pollInterval); 
+      S.results = d.results;
+      S.jobMetadata = S.jobMetadata || {};
+      S.jobMetadata.is_truncated = d.is_truncated || false;
+      renderResults(); 
+    }
+    else if (d.status === 'error') { 
+      clearInterval(S.pollInterval); 
+      showError(d.message); 
+    }
+  } catch (e) { 
+    clearInterval(S.pollInterval); 
+    showError('Lost connection: ' + e.message); 
+  }
 }
 
 // ── download report ────────────────────────────────────────────────────────────
 async function downloadReport() {
+  if (!S.token) {
+    toast('🔒', 'Please login to download reports.');
+    setTimeout(() => window.location.href = 'login.html', 1500);
+    return;
+  }
   if (!S.jobId) return;
   try {
-    const r = await fetch(getBase() + `/report/${S.jobId}`);
+    const r = await fetch(getBase() + `/report/${S.jobId}`, { headers: getHeaders() });
+    if (!r.ok) { toast('❌', 'Download failed: ' + (r.status === 401 ? 'Unauthorized' : 'Server error')); return; }
     const blob = await r.blob();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);

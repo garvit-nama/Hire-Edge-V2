@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="css/components.css" />
   <link rel="stylesheet" href="css/results.css" />
   <link rel="stylesheet" href="css/animations.css" />
+  <link rel="stylesheet" href="css/freemium.css" />
 </head>
 
 <body>
@@ -166,7 +167,7 @@
           <input class="field-inp" id="jobRole" type="text" placeholder="e.g. Full Stack Developer at Stripe"
             oninput="checkReady()" />
         </div>
-        <input type="hidden" id="backendUrl" value="https://hireedge-backend.onrender.com" />
+        <input type="hidden" id="backendUrl" />
       </div>
 
       <!-- Model picker -->
@@ -292,6 +293,9 @@
     <span id="toastMsg">Done</span>
   </div>
 
+  <!-- Phase 5: Socket.IO client for real-time WebSocket updates -->
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  
   <script src="js/state.js"></script>
   <script src="js/api.js"></script>
   <script src="js/render.js"></script>

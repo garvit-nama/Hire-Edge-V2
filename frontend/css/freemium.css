@@ -1,0 +1,206 @@
+/* ════════════════════════════════════════════════════════════════════════════════
+   FREEMIUM TIER - GLASSMORPHISM CONTENT TRUNCATION
+   ════════════════════════════════════════════════════════════════════════════════ */
+
+/* Agent panel truncation overlay with glassmorphism effect */
+.agent-panel.truncated {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(248,249,250,0.95));
+}
+
+.agent-panel.truncated::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 70%;
+    background: linear-gradient(
+        to bottom,
+        rgba(255, 255, 255, 0),
+        rgba(200, 210, 230, 0.7)
+    );
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255, 255, 255, 0.4);
+    z-index: 10;
+    pointer-events: none;
+}
+
+/* Truncation banner - "Upgrade" CTA */
+.truncation-banner {
+    position: absolute;
+    bottom: 20%;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 11;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    padding: 14px 28px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1), 
+                0 0 1px rgba(0, 0, 0, 0.05);
+    text-align: center;
+    font-weight: 600;
+    color: #2563eb;
+    white-space: nowrap;
+    pointer-events: auto;
+}
+
+.truncation-banner:hover {
+    background: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15),
+                0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+/* Optional: Add a subtle animation hint on page load */
+@keyframes fadeInTruncation {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}
+
+.truncation-banner {
+    animation: fadeInTruncation 0.4s ease-out;
+}
+
+/* Upgrade CTA button styling */
+.upgrade-cta-btn {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(37, 99, 235, 0.3);
+}
+
+.upgrade-cta-btn:hover {
+    background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+    transform: translateY(-2px);
+}
+
+.upgrade-cta-btn:active {
+    transform: translateY(0);
+}
+
+/* Free tier badge on results section */
+.free-tier-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+    color: #78350f;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-left: 8px;
+}
+
+/* Modal or info section for upgrade offer */
+.upgrade-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    padding: 32px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    max-width: 450px;
+    text-align: center;
+}
+
+.upgrade-modal h2 {
+    margin: 0 0 16px;
+    color: #1f2937;
+    font-size: 24px;
+}
+
+.upgrade-modal p {
+    margin: 0 0 24px;
+    color: #6b7280;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.upgrade-modal-buttons {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.upgrade-modal-buttons button {
+    padding: 12px 24px;
+    border-radius: 8px;
+    border: none;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.upgrade-modal-buttons .primary {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    color: white;
+    flex: 1;
+}
+
+.upgrade-modal-buttons .primary:hover {
+    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+}
+
+.upgrade-modal-buttons .secondary {
+    background: rgba(0, 0, 0, 0.05);
+    color: #374151;
+    flex: 1;
+}
+
+.upgrade-modal-buttons .secondary:hover {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+/* Overlay behind modal */
+.upgrade-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 999;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .truncation-banner {
+        font-size: 14px;
+        padding: 10px 16px;
+        bottom: 15%;
+    }
+    
+    .agent-panel.truncated::after {
+        height: 75%;
+    }
+    
+    .upgrade-modal {
+        max-width: 90%;
+        padding: 24px;
+        margin: 16px;
+    }
+}

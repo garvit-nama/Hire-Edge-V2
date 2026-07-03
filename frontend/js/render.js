@@ -1,4 +1,4 @@
-const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&#34;').replace(/'/g,'&#39;');
 
 function parseSections(text) {
   const lines = text.split('\n');
@@ -223,6 +223,8 @@ function parseScores(text) {
 function renderResults() {
   setStep(4);
   const r = S.results;
+  const isTruncated = S.jobMetadata?.is_truncated === true;
+  
   renderReportCard('tp-candidate', r.a1 || '');
   renderReportCard('tp-hr',        r.a2 || '');
   renderReportCard('tp-alignment', r.a3 || '');
@@ -230,9 +232,63 @@ function renderResults() {
   renderMessages  ('tp-messages',  r.a5 || '');
   renderScorecard ('tp-scorecard', r.a6 || '');
   parseScores(r.a6 || '');
+  
+  // Phase 4: Apply glassmorphism truncation effect for free tier
+  if (isTruncated) {
+    applyTruncationEffect();
+  }
+  
   document.getElementById('resultsWrap').classList.add('show');
   document.getElementById('resultsWrap').scrollIntoView({ behavior:'smooth' });
   toast('✅', 'Report ready!');
+}
+
+function applyTruncationEffect() {
+  const panelIds = ['tp-candidate', 'tp-hr', 'tp-alignment', 'tp-roadmap', 'tp-messages', 'tp-scorecard'];
+  panelIds.forEach(id => {
+    const panel = document.getElementById(id);
+    if (panel) {
+      panel.classList.add('truncated');
+      
+      // Add truncation banner
+      const banner = document.createElement('div');
+      banner.className = 'truncation-banner';
+      banner.textContent = '⬆️ Upgrade to Premium to see full analysis';
+      banner.onclick = () => showUpgradeModal();
+      panel.appendChild(banner);
+    }
+  });
+  
+  // Add upgrade CTA to results banner if not already present
+  const dlBtn = document.getElementById('dlBtn');
+  if (dlBtn && !document.querySelector('.free-tier-badge')) {
+    const badge = document.createElement('span');
+    badge.className = 'free-tier-badge';
+    badge.textContent = 'Free Tier - Limited Content';
+    dlBtn.parentElement.appendChild(badge);
+  }
+}
+
+function showUpgradeModal() {
+  if (document.querySelector('.upgrade-modal-overlay')) return; // Already shown
+  
+  const overlay = document.createElement('div');
+  overlay.className = 'upgrade-modal-overlay';
+  overlay.onclick = () => { overlay.remove(); modal.remove(); };
+  
+  const modal = document.createElement('div');
+  modal.className = 'upgrade-modal';
+  modal.innerHTML = `
+    <h2>🚀 Unlock Full Analysis</h2>
+    <p>Upgrade to Premium to see complete agent insights, full messaging strategies, and detailed roadmaps.</p>
+    <div class="upgrade-modal-buttons">
+      <button class="primary" onclick="this.closest('.upgrade-modal').parentElement.querySelector('.upgrade-modal-overlay').remove(); this.closest('.upgrade-modal').remove();">Go Premium</button>
+      <button class="secondary" onclick="this.closest('.upgrade-modal').parentElement.querySelector('.upgrade-modal-overlay').remove(); this.closest('.upgrade-modal').remove();">Maybe Later</button>
+    </div>
+  `;
+  
+  document.body.appendChild(overlay);
+  document.body.appendChild(modal);
 }
 
 function copyMsg(btn) {
@@ -245,5 +301,5 @@ function copyMsg(btn) {
   navigator.clipboard.writeText(txt).then(() => {
     btn.textContent = '✓ Copied'; btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
-  });
+  }).catch(() => toast('❌', 'Clipboard access denied. Copy manually.'));
 }
