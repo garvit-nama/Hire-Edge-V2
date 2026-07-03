@@ -23,3 +23,8 @@ class Job(db.Model):
     report_content = db.Column(db.Text, nullable=True) # The generated text report
     results_json = db.Column(db.String, nullable=True) # Stored JSON of individual agent outputs
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    
+    # Freemium tier tracking (Phase 3)
+    analysis_number = db.Column(db.Integer, default=1) # 1st, 2nd, 3rd... analysis for this user
+    user_tier_at_time = db.Column(db.String(50), default='free') # Snapshot of tier when analysis ran
+    is_truncated = db.Column(db.Boolean, default=False) # Whether content was truncated for free users

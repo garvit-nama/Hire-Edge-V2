@@ -29,6 +29,9 @@ from pathlib import Path
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
+# ── WebSocket (Phase 5) ─────────────────────────────────────────────────────────
+from flask_socketio import SocketIO, emit, join_room, leave_room
+
 import bcrypt
 import jwt
 from functools import wraps
@@ -53,11 +56,16 @@ from models import db, User, Job
 # ════════════════════════════════════════════════════════════════════════════════
 #  CONFIG
 # ════════════════════════════════════════════════════════════════════════════════
-app = Flask(__name__)
+app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app, origins="*")
 
+# Phase 5: Initialize WebSocket
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'hireedge-super-secret-key')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///hireedge.db'
+# Database: Read DATABASE_URL from env (PostgreSQL for Supabase), fallback to SQLite for local dev
+DATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:///hireedge.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
@@ -89,6 +97,28 @@ def token_required(f):
             
         return f(current_user, *args, **kwargs)
     return decorated
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  WEBSOCKET HANDLERS (Phase 5)
+# ════════════════════════════════════════════════════════════════════════════════
+
+@socketio.on('connect')
+def handle_connect():
+    print(f"✅ WebSocket client connected: {request.sid}")
+    emit('connected', {'data': 'Connected to HireEdge server'})
+
+@socketio.on('join_job')
+def on_join_job(data):
+    """Client joins a job room to receive real-time status updates"""
+    jid = data.get('job_id') if isinstance(data, dict) else str(data)
+    join_room(jid)
+    print(f"📍 Client {request.sid} joined room: {jid}")
+    emit('joined', {'job_id': jid})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print(f"❌ WebSocket client disconnected: {request.sid}")
 
 
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
@@ -614,6 +644,39 @@ AGENT_META = [
 
 
 # ════════════════════════════════════════════════════════════════════════════════
+#  FREEMIUM TRUNCATION HELPER (Phase 3)
+# ════════════════════════════════════════════════════════════════════════════════
+
+def truncate_agent_output(text: str, percentage: int = 70) -> str:
+    """
+    Truncate text to keep only the first (100 - percentage)% of content.
+    For 70% truncation, keep first 30%.
+    Adds a truncation marker at the end.
+    """
+    if not text:
+        return text
+    
+    lines = text.split('\n')
+    keep_lines = max(1, len(lines) * (100 - percentage) // 100)
+    truncated = '\n'.join(lines[:keep_lines])
+    truncated += f"\n\n[...TRUNCATED FOR FREE TIER - Upgrade to Premium to see full {keep_lines}/{len(lines)} lines...]"
+    return truncated
+
+
+def truncate_agent_outputs(results: dict, percentage: int = 70) -> dict:
+    """
+    Truncate all agent outputs (a1-a6) for free tier users.
+    """
+    truncated_results = {}
+    for agent_id, content in results.items():
+        if agent_id in ["a1", "a2", "a3", "a4", "a5", "a6"]:
+            truncated_results[agent_id] = truncate_agent_output(content, percentage)
+        else:
+            truncated_results[agent_id] = content
+    return truncated_results
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 #  BACKGROUND JOB RUNNER
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -627,12 +690,67 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
         job["status"]  = "running"
         job["message"] = "Starting agentic pipeline..."
 
+        # Phase 5: Emit initial running status via WebSocket
+        socketio.emit('job_status', {
+            'id': job_id,
+            'status': 'running',
+            'progress': 0,
+            'message': 'Running 6-agent pipeline...',
+            'agents': job["agents"]
+        }, room=job_id)
+
         r1 = agent1_candidate(model, job_id, candidate_text, role)
+        job["progress"] = 1
+        socketio.emit('job_status', {
+            'id': job_id,
+            'status': 'running',
+            'progress': 1,
+            'message': 'Candidate analysis complete.',
+            'agents': job["agents"]
+        }, room=job_id)
+
         r2 = agent2_hr(model, job_id, hr_text)
+        job["progress"] = 2
+        socketio.emit('job_status', {
+            'id': job_id,
+            'status': 'running',
+            'progress': 2,
+            'message': 'HR profile complete.',
+            'agents': job["agents"]
+        }, room=job_id)
+
         r3 = agent3_alignment(model, job_id, r1, r2, role)
+        job["progress"] = 3
+        socketio.emit('job_status', {
+            'id': job_id,
+            'status': 'running',
+            'progress': 3,
+            'message': 'Alignment strategy complete.',
+            'agents': job["agents"]
+        }, room=job_id)
+
         r4 = agent4_roadmap(model, job_id, r1, r2, r3, role)
+        job["progress"] = 4
+        socketio.emit('job_status', {
+            'id': job_id,
+            'status': 'running',
+            'progress': 4,
+            'message': 'Outreach roadmap complete.',
+            'agents': job["agents"]
+        }, room=job_id)
+
         r5 = agent5_messages(model, job_id, r1, r2, r3, role)
+        job["progress"] = 5
+        socketio.emit('job_status', {
+            'id': job_id,
+            'status': 'running',
+            'progress': 5,
+            'message': 'Message suite complete.',
+            'agents': job["agents"]
+        }, room=job_id)
+
         r6 = agent6_scorecard(model, job_id, r1, r2, r3, r4, role)
+        job["progress"] = 6
 
         D = "=" * 70
         report = "\n".join([
@@ -655,6 +773,18 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
 
         # Save to database
         with app.app_context():
+            # Phase 3: Check if free user and apply truncation for 2nd+ analyses
+            user = User.query.filter_by(id=user_id).first()
+            analysis_count = Job.query.filter_by(user_id=user_id).count() + 1
+            is_free_tier = user and user.subscription_tier == 'free'
+            is_second_plus = analysis_count >= 2
+            is_truncated = False
+            results_to_save = job["results"]
+            
+            if is_free_tier and is_second_plus:
+                results_to_save = truncate_agent_outputs(job["results"], percentage=70)
+                is_truncated = True
+            
             new_job = Job(
                 id=job_id,
                 user_id=user_id,
@@ -662,10 +792,24 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
                 model=model,
                 status='complete',
                 report_content=report,
-                results_json=json.dumps(job["results"])
+                results_json=json.dumps(results_to_save),
+                analysis_number=analysis_count,
+                user_tier_at_time=user.subscription_tier if user else 'free',
+                is_truncated=is_truncated
             )
             db.session.add(new_job)
             db.session.commit()
+            
+            # Phase 5: Emit final completion status via WebSocket with truncation metadata
+            socketio.emit('job_status', {
+                'id': job_id,
+                'status': 'complete',
+                'progress': 6,
+                'message': 'Analysis complete.',
+                'agents': job["agents"],
+                'results': results_to_save,
+                'is_truncated': is_truncated
+            }, room=job_id)
 
     except Exception as e:
         job["status"]  = "error"
@@ -676,15 +820,29 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
                 ag["error"]  = str(e)
         
         with app.app_context():
+            user = User.query.filter_by(id=user_id).first()
+            analysis_count = Job.query.filter_by(user_id=user_id).count() + 1
             new_job = Job(
                 id=job_id,
                 user_id=user_id,
                 job_role=role,
                 model=model,
                 status='error',
+                analysis_number=analysis_count,
+                user_tier_at_time=user.subscription_tier if user else 'free',
+                is_truncated=False
             )
             db.session.add(new_job)
             db.session.commit()
+        
+        # Phase 5: Emit error status via WebSocket
+        socketio.emit('job_status', {
+            'id': job_id,
+            'status': 'error',
+            'progress': job["progress"],
+            'message': str(e),
+            'agents': job["agents"]
+        }, room=job_id)
     finally:
         try:
             c_pdf.unlink(missing_ok=True)
@@ -697,7 +855,12 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
 #  API ROUTES
 # ════════════════════════════════════════════════════════════════════════════════
 # ── Serve Frontend ─────────────────────────────────────────────────────────────
+
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
 @app.route("/")
+def serve_index():
+    return send_from_directory(FRONTEND_DIR, "index.html")
 
 @app.route("/health")
 def health():
@@ -830,7 +993,8 @@ def job_status(current_user, jid):
             "progress": 6 if job_db.status == 'complete' else 0,
             "job_role": job_db.job_role,
             "model": job_db.model,
-            "agents": [] # History view doesn't need full agent status usually
+            "agents": [],
+            "is_truncated": job_db.is_truncated  # Phase 4: Tell frontend if content is truncated
         }
         if job_db.status == 'complete' and job_db.results_json:
             resp["results"] = json.loads(job_db.results_json)
@@ -843,6 +1007,7 @@ def job_status(current_user, jid):
          "status":a["status"],"error":a.get("error")}
         for a in job["agents"]
     ]
+    resp["is_truncated"] = False  # In-memory jobs are never truncated yet
     if job["status"] == "complete":
         resp["results"] = job["results"]
     return jsonify(resp)
@@ -859,14 +1024,16 @@ def download_report(current_user, jid):
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  ENTRY POINT  — Waitress (Windows-compatible, production-grade)
+#  ENTRY POINT  — SocketIO (supports WebSocket + fallback polling)
 # ════════════════════════════════════════════════════════════════════════════════
+# For production (Render/Heroku), use: gunicorn --worker-class eventlet -w 1 app:app
+# For local development, socketio.run() with Flask dev server
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print("\n" + "=" * 58)
     print(f"  HireEdge  —  http://0.0.0.0:{port}")
-    print("  Server  :  Waitress (Windows-compatible)")
+    print("  Server  :  Flask-SocketIO (WebSocket + polling fallback)")
     print(f"  Health  :  http://0.0.0.0:{port}/health")
     print("=" * 58 + "\n")
-    serve(app, host="0.0.0.0", port=port, threads=4)
+    socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
