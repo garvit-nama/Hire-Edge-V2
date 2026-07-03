@@ -19,11 +19,14 @@ SET KEY:
 RUN:
   python app.py
 """
+import eventlet
+eventlet.monkey_patch()
+
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
 import os, re, time, json, uuid, threading
-from pathlib import Path
 
 # ── Flask ──────────────────────────────────────────────────────────────────────
 from flask import Flask, request, jsonify, Response
@@ -65,6 +68,8 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'hireedge-super-secret-key')
 # Database: Read DATABASE_URL from env (PostgreSQL for Supabase), fallback to SQLite for local dev
 DATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:///hireedge.db')
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
