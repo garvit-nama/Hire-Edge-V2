@@ -35,7 +35,7 @@ function checkReady() {
 function pickModel(el) {
   document.querySelectorAll('.mchip').forEach(c => c.classList.remove('active'));
   el.classList.add('active');
-  S.model = el.dataset.model;
+  S.model = el.dataset.model || 'llama-3.3-70b-versatile';
 }
 
 // Drag & drop events
@@ -50,6 +50,7 @@ function pickModel(el) {
     if (file?.type === 'application/pdf') {
       const type  = id === 'dropCandidate' ? 'candidate' : 'hr';
       const input = el.querySelector('input');
+      if (!input) return;
       const dt    = new DataTransfer(); dt.items.add(file); input.files = dt.files;
       handleDrop(type, input);
     }
@@ -122,9 +123,10 @@ function updateAgentBoard(data) {
     }
   });
 
-  const pct = Math.round(((data.progress || 0) / 6) * 100);
+  const total = AGENT_DEFAULTS.length;
+  const pct = Math.round(((data.progress || 0) / total) * 100);
   document.getElementById('progFill').style.width   = pct + '%';
-  document.getElementById('progCount').textContent  = `${data.progress || 0} / 6 agents complete`;
+  document.getElementById('progCount').textContent  = `${data.progress || 0} / ${total} agents complete`;
   document.getElementById('progPct').textContent    = pct + '%';
 }
 

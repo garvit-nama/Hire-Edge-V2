@@ -1,0 +1,2 @@
+C:\Users\Welcome\Documents\Project fr\hireEdge\backend\app.py:747: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
