@@ -467,6 +467,58 @@ async function pollJob(jid) {
   }
 }
 
+// ── load archived job ────────────────────────────────────────────────────────
+async function loadArchivedJob(jid) {
+  if (!S.token) {
+    toast('🔒', 'Please login to view this report.');
+    setTimeout(() => window.location.href = 'login.html', 1500);
+    return;
+  }
+
+  document.getElementById('inputPanel').style.opacity = '0.4';
+  document.getElementById('inputPanel').style.pointerEvents = 'none';
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('errorStrip').classList.remove('show');
+  document.getElementById('progressPanel').classList.add('show');
+  setStep(3);
+  buildAgentBoard([]);
+
+  S.jobId = jid;
+  
+  try {
+    const r = await fetch(getBase() + `/status/${jid}`, { headers: getHeaders() });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Failed to load report');
+    
+    updateAgentBoard(d);
+    
+    // Store metadata for freemium truncation
+    if (d.is_truncated !== undefined) {
+      S.jobMetadata = S.jobMetadata || {};
+      S.jobMetadata.is_truncated = d.is_truncated;
+    }
+    
+    if (d.status === 'complete') {
+      S.results = d.results;
+      S.jobMetadata = S.jobMetadata || {};
+      S.jobMetadata.is_truncated = d.is_truncated || false;
+      renderResults();
+    } else if (d.status === 'error') {
+      showError(d.message);
+    } else {
+      initWebSocket();
+      if (wsConnected && socket) {
+        socket.emit('join_job', { job_id: S.jobId });
+      } else {
+        S.pollInterval = setInterval(() => pollJob(S.jobId), 2000);
+      }
+      pollJob(S.jobId);
+    }
+  } catch (e) {
+    showError(e.message);
+  }
+}
+
 // ── download report ────────────────────────────────────────────────────────────
 async function downloadReport() {
   if (!S.token) {

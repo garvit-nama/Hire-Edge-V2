@@ -187,3 +187,10 @@ function updateUserUI() {
 checkHealth();
 updateUserUI();
 setInterval(checkHealth, 20000);
+
+// Parse URL parameter and load archived report if present
+const urlParams = new URLSearchParams(window.location.search);
+const reportId = urlParams.get('report');
+if (reportId) {
+  loadArchivedJob(reportId);
+}
