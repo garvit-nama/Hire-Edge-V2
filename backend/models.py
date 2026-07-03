@@ -16,10 +16,12 @@ class User(db.Model):
 
 class Job(db.Model):
     id = db.Column(db.String(36), primary_key=True) # Storing UUIDs
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
     job_role = db.Column(db.String(255))
     model = db.Column(db.String(100))
     status = db.Column(db.String(50), default='queued') # queued, complete, error
+    progress = db.Column(db.Integer, default=0)
+    current_message = db.Column(db.String(255), default='Queued')
     report_content = db.Column(db.Text, nullable=True) # The generated text report
     results_json = db.Column(db.String, nullable=True) # Stored JSON of individual agent outputs
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
