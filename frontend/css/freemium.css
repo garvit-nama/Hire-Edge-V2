@@ -3,13 +3,13 @@
    ════════════════════════════════════════════════════════════════════════════════ */
 
 /* Agent panel truncation overlay with glassmorphism effect */
-.agent-panel.truncated {
+.tab-panel.truncated {
     position: relative;
     overflow: hidden;
     background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(248,249,250,0.95));
 }
 
-.agent-panel.truncated::after {
+.tab-panel.truncated::after {
     content: '';
     position: absolute;
     bottom: 0;
@@ -194,7 +194,7 @@
         bottom: 15%;
     }
     
-    .agent-panel.truncated::after {
+    .tab-panel.truncated::after {
         height: 75%;
     }
     
