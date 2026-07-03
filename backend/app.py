@@ -185,6 +185,40 @@ def clean_output(text: str) -> str:
 #  CALLBACK HANDLER  — updates job state, frontend polls /status
 # ════════════════════════════════════════════════════════════════════════════════
 
+AGENT_META = [
+    {"id": "a1", "name": "Candidate Analyser",   "label": "Parsing resume & extracting selling points"},
+    {"id": "a2", "name": "HR Profiler",           "label": "Building hiring manager intelligence model"},
+    {"id": "a3", "name": "Alignment Strategist",  "label": "Matching candidate strengths to HR priorities"},
+    {"id": "a4", "name": "Outreach Architect",    "label": "Designing Day / Week / Month roadmap"},
+    {"id": "a5", "name": "Message Copywriter",    "label": "Crafting personalized message suite"},
+    {"id": "a6", "name": "Success Analyst",       "label": "Scoring campaign & building action plan"},
+]
+
+def get_agents_status(progress, status, current_message):
+    agents = []
+    for i, meta in enumerate(AGENT_META):
+        agent_status = "queued"
+        agent_label = meta["label"]
+        if i < progress:
+            agent_status = "done"
+            agent_label = "Complete"
+        elif i == progress:
+            if status == "running":
+                agent_status = "running"
+                agent_label = current_message
+            elif status == "error":
+                agent_status = "error"
+                agent_label = "Failed"
+        agents.append({
+            "id": meta["id"],
+            "name": meta["name"],
+            "label": agent_label,
+            "status": agent_status,
+            "error": None
+        })
+    return agents
+
+
 class AgentProgressCallback(BaseCallbackHandler):
     def __init__(self, job_id: str, agent_index: int, agent_name: str):
         self.job_id      = job_id
@@ -196,15 +230,47 @@ class AgentProgressCallback(BaseCallbackHandler):
 
     def on_llm_start(self, serialized, prompts, **kwargs):
         job = self._job()
+        msg = f"Running {self.agent_name}..."
         if job:
             job["agents"][self.agent_index]["status"] = "running"
             job["agents"][self.agent_index]["label"]  = f"{self.agent_name}: querying LLM..."
-            job["message"] = f"Running {self.agent_name}..."
+            job["message"] = msg
+
+        with app.app_context():
+            job_db = Job.query.filter_by(id=self.job_id).first()
+            if job_db:
+                job_db.current_message = msg
+                db.session.commit()
+                
+            # Emit SocketIO update
+            socketio.emit('job_status', {
+                'id': self.job_id,
+                'status': 'running',
+                'progress': job_db.progress if job_db else 0,
+                'message': msg,
+                'agents': job["agents"] if job else get_agents_status(job_db.progress if job_db else 0, 'running', msg)
+            }, room=self.job_id)
 
     def on_llm_end(self, response, **kwargs):
         job = self._job()
+        msg = f"{self.agent_name}: processing output..."
         if job:
-            job["agents"][self.agent_index]["label"] = f"{self.agent_name}: processing output..."
+            job["agents"][self.agent_index]["label"] = msg
+
+        with app.app_context():
+            job_db = Job.query.filter_by(id=self.job_id).first()
+            if job_db:
+                job_db.current_message = msg
+                db.session.commit()
+                
+            # Emit SocketIO update
+            socketio.emit('job_status', {
+                'id': self.job_id,
+                'status': 'running',
+                'progress': job_db.progress if job_db else 0,
+                'message': msg,
+                'agents': job["agents"] if job else get_agents_status(job_db.progress if job_db else 0, 'running', msg)
+            }, room=self.job_id)
 
     def on_llm_error(self, error, **kwargs):
         job = self._job()
@@ -217,9 +283,6 @@ class AgentProgressCallback(BaseCallbackHandler):
         if job:
             job["agents"][self.agent_index]["status"] = "done"
             job["agents"][self.agent_index]["label"]  = "Complete"
-            job["progress"] = sum(
-                1 for a in job["agents"] if a["status"] == "done"
-            )
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -634,18 +697,7 @@ Mindset note:
 """, cb, "Success Analyst")
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-#  AGENT METADATA
-# ════════════════════════════════════════════════════════════════════════════════
 
-AGENT_META = [
-    {"id": "a1", "name": "Candidate Analyser",   "label": "Parsing resume & extracting selling points"},
-    {"id": "a2", "name": "HR Profiler",           "label": "Building hiring manager intelligence model"},
-    {"id": "a3", "name": "Alignment Strategist",  "label": "Matching candidate strengths to HR priorities"},
-    {"id": "a4", "name": "Outreach Architect",    "label": "Designing Day / Week / Month roadmap"},
-    {"id": "a5", "name": "Message Copywriter",    "label": "Crafting personalized message suite"},
-    {"id": "a6", "name": "Success Analyst",       "label": "Scoring campaign & building action plan"},
-]
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -686,76 +738,77 @@ def truncate_agent_outputs(results: dict, percentage: int = 70) -> dict:
 # ════════════════════════════════════════════════════════════════════════════════
 
 def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
+    if job_id not in jobs:
+        jobs[job_id] = {
+            "id": job_id, "status": "queued", "message": "Queued.",
+            "progress": 0, "job_role": role, "model": model,
+            "agents": get_agents_status(0, "queued", "Queued."),
+            "results": {}, "report": "",
+        }
     job = jobs[job_id]
+    
+    def update_status(status_str, progress_val, msg_str, results_dict=None, report_str=None, is_truncated_val=False, inc_analyses_used=False):
+        job["status"] = status_str
+        job["progress"] = progress_val
+        job["message"] = msg_str
+        if results_dict is not None: job["results"] = results_dict
+        if report_str is not None: job["report"] = report_str
+        job["agents"] = get_agents_status(progress_val, status_str, msg_str)
+        
+        with app.app_context():
+            job_db = Job.query.filter_by(id=job_id).first()
+            user = User.query.filter_by(id=user_id).first()
+            if job_db:
+                job_db.status = status_str
+                job_db.progress = progress_val
+                job_db.current_message = msg_str
+                if results_dict is not None: job_db.results_json = json.dumps(results_dict)
+                if report_str is not None: job_db.report_content = report_str
+                if is_truncated_val: job_db.is_truncated = True
+                
+                # Increment free use ONLY on successful completion!
+                if inc_analyses_used and user and user.subscription_tier == 'free':
+                    user.free_analyses_used += 1
+                    
+                if status_str == 'complete':
+                    job_db.analysis_number = Job.query.filter_by(user_id=user_id).count()
+                    job_db.user_tier_at_time = user.subscription_tier if user else 'free'
+                    
+                db.session.commit()
+                
+            # Emit SocketIO update
+            socketio.emit('job_status', {
+                'id': job_id,
+                'status': status_str,
+                'progress': progress_val,
+                'message': msg_str,
+                'agents': job["agents"],
+                'results': results_dict,
+                'is_truncated': job_db.is_truncated if job_db else False
+            }, room=job_id)
+
     try:
-        job["status"]  = "extracting"
-        job["message"] = "Extracting text from PDFs..."
+        update_status("running", 0, "Extracting text from PDFs...")
         candidate_text = load_pdf(c_pdf)
         hr_text        = load_pdf(h_pdf)
-        job["status"]  = "running"
-        job["message"] = "Starting agentic pipeline..."
-
-        # Phase 5: Emit initial running status via WebSocket
-        socketio.emit('job_status', {
-            'id': job_id,
-            'status': 'running',
-            'progress': 0,
-            'message': 'Running 6-agent pipeline...',
-            'agents': job["agents"]
-        }, room=job_id)
+        update_status("running", 0, "Starting agentic pipeline...")
 
         r1 = agent1_candidate(model, job_id, candidate_text, role)
-        job["progress"] = 1
-        socketio.emit('job_status', {
-            'id': job_id,
-            'status': 'running',
-            'progress': 1,
-            'message': 'Candidate analysis complete.',
-            'agents': job["agents"]
-        }, room=job_id)
+        update_status("running", 1, "Candidate analysis complete.")
 
         r2 = agent2_hr(model, job_id, hr_text)
-        job["progress"] = 2
-        socketio.emit('job_status', {
-            'id': job_id,
-            'status': 'running',
-            'progress': 2,
-            'message': 'HR profile complete.',
-            'agents': job["agents"]
-        }, room=job_id)
+        update_status("running", 2, "HR profile complete.")
 
         r3 = agent3_alignment(model, job_id, r1, r2, role)
-        job["progress"] = 3
-        socketio.emit('job_status', {
-            'id': job_id,
-            'status': 'running',
-            'progress': 3,
-            'message': 'Alignment strategy complete.',
-            'agents': job["agents"]
-        }, room=job_id)
+        update_status("running", 3, "Alignment strategy complete.")
 
         r4 = agent4_roadmap(model, job_id, r1, r2, r3, role)
-        job["progress"] = 4
-        socketio.emit('job_status', {
-            'id': job_id,
-            'status': 'running',
-            'progress': 4,
-            'message': 'Outreach roadmap complete.',
-            'agents': job["agents"]
-        }, room=job_id)
+        update_status("running", 4, "Outreach roadmap complete.")
 
         r5 = agent5_messages(model, job_id, r1, r2, r3, role)
-        job["progress"] = 5
-        socketio.emit('job_status', {
-            'id': job_id,
-            'status': 'running',
-            'progress': 5,
-            'message': 'Message suite complete.',
-            'agents': job["agents"]
-        }, room=job_id)
+        update_status("running", 5, "Message suite complete.")
 
         r6 = agent6_scorecard(model, job_id, r1, r2, r3, r4, role)
-        job["progress"] = 6
 
         D = "=" * 70
         report = "\n".join([
@@ -771,76 +824,36 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
         ])
 
         (REPORTS_FOLDER / f"{job_id}.txt").write_text(report, encoding="utf-8")
-        job["results"] = {"a1":r1,"a2":r2,"a3":r3,"a4":r4,"a5":r5,"a6":r6}
-        job["report"]  = report
-        job["status"]  = "complete"
-        job["message"] = "Analysis complete."
+        job_results = {"a1":r1,"a2":r2,"a3":r3,"a4":r4,"a5":r5,"a6":r6}
 
-        # Save to database
+        # Truncation logic (Phase 3)
         with app.app_context():
-            # Phase 3: Check if free user and apply truncation for 2nd+ analyses
             user = User.query.filter_by(id=user_id).first()
-            analysis_count = Job.query.filter_by(user_id=user_id).count() + 1
+            analysis_count = Job.query.filter_by(user_id=user_id).count()
             is_free_tier = user and user.subscription_tier == 'free'
             is_second_plus = analysis_count >= 2
             is_truncated = False
-            results_to_save = job["results"]
+            results_to_save = job_results
             
             if is_free_tier and is_second_plus:
-                results_to_save = truncate_agent_outputs(job["results"], percentage=70)
+                results_to_save = truncate_agent_outputs(job_results, percentage=70)
                 is_truncated = True
-            
-            new_job = Job(
-                id=job_id,
-                user_id=user_id,
-                job_role=role,
-                model=model,
-                status='complete',
-                report_content=report,
-                results_json=json.dumps(results_to_save),
-                analysis_number=analysis_count,
-                user_tier_at_time=user.subscription_tier if user else 'free',
-                is_truncated=is_truncated
-            )
-            db.session.add(new_job)
-            db.session.commit()
-            
-            # Phase 5: Emit final completion status via WebSocket with truncation metadata
-            socketio.emit('job_status', {
-                'id': job_id,
-                'status': 'complete',
-                'progress': 6,
-                'message': 'Analysis complete.',
-                'agents': job["agents"],
-                'results': results_to_save,
-                'is_truncated': is_truncated
-            }, room=job_id)
+
+        update_status("complete", 6, "Analysis complete.", results_dict=results_to_save, report_str=report, is_truncated_val=is_truncated, inc_analyses_used=True)
 
     except Exception as e:
-        job["status"]  = "error"
+        job["status"] = "error"
         job["message"] = str(e)
-        for ag in job["agents"]:
-            if ag["status"] == "running":
-                ag["status"] = "error"
-                ag["error"]  = str(e)
+        job["agents"] = get_agents_status(job["progress"], "error", str(e))
         
         with app.app_context():
-            user = User.query.filter_by(id=user_id).first()
-            analysis_count = Job.query.filter_by(user_id=user_id).count() + 1
-            new_job = Job(
-                id=job_id,
-                user_id=user_id,
-                job_role=role,
-                model=model,
-                status='error',
-                analysis_number=analysis_count,
-                user_tier_at_time=user.subscription_tier if user else 'free',
-                is_truncated=False
-            )
-            db.session.add(new_job)
-            db.session.commit()
+            job_db = Job.query.filter_by(id=job_id).first()
+            if job_db:
+                job_db.status = 'error'
+                job_db.current_message = str(e)
+                db.session.commit()
         
-        # Phase 5: Emit error status via WebSocket
+        # Emit error status via Socket.IO
         socketio.emit('job_status', {
             'id': job_id,
             'status': 'error',
@@ -848,6 +861,7 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
             'message': str(e),
             'agents': job["agents"]
         }, room=job_id)
+        
     finally:
         try:
             c_pdf.unlink(missing_ok=True)
@@ -960,17 +974,31 @@ def analyse(current_user):
     request.files["candidate_pdf"].save(c_path)
     request.files["hr_pdf"].save(h_path)
     
-    # Increment free use
-    if current_user.subscription_tier == 'free':
-        current_user.free_analyses_used += 1
+    # Save the job record immediately to the database (in queued state)
+    try:
+        new_job = Job(
+            id=jid,
+            user_id=current_user.id,
+            job_role=role,
+            model=model,
+            status='queued',
+            progress=0,
+            current_message='Queued.'
+        )
+        db.session.add(new_job)
         db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Failed to initialize job in database: {str(e)}"}), 500
 
+    # Populate in-memory dict for SocketIO room support
     jobs[jid] = {
         "id": jid, "status": "queued", "message": "Queued.",
         "progress": 0, "job_role": role, "model": model,
-        "agents": [{**m, "status":"queued","result":None,"error":None} for m in AGENT_META],
+        "agents": get_agents_status(0, "queued", "Queued."),
         "results": {}, "report": "",
     }
+    
     threading.Thread(
         target=run_job, args=(jid, current_user.id, c_path, h_path, role, model), daemon=True
     ).start()
@@ -983,38 +1011,24 @@ def job_status(current_user, jid):
     # Check if job belongs to user
     job_db = Job.query.filter_by(id=jid, user_id=current_user.id).first()
     
-    # Check in-memory first (for active jobs)
-    job = jobs.get(jid)
-    
-    if not job and not job_db:
+    if not job_db:
         return jsonify({"error": "Not found or access denied."}), 404
         
-    if not job:
-        # Load from DB if not in memory
-        resp = {
-            "id": job_db.id,
-            "status": job_db.status,
-            "message": "Loaded from archive.",
-            "progress": 6 if job_db.status == 'complete' else 0,
-            "job_role": job_db.job_role,
-            "model": job_db.model,
-            "agents": [],
-            "is_truncated": job_db.is_truncated  # Phase 4: Tell frontend if content is truncated
-        }
-        if job_db.status == 'complete' and job_db.results_json:
-            resp["results"] = json.loads(job_db.results_json)
-        return jsonify(resp)
-
-    # Returning in-memory job status
-    resp = {k: job[k] for k in ("id","status","message","progress","job_role","model")}
-    resp["agents"] = [
-        {"id":a["id"],"name":a["name"],"label":a["label"],
-         "status":a["status"],"error":a.get("error")}
-        for a in job["agents"]
-    ]
-    resp["is_truncated"] = False  # In-memory jobs are never truncated yet
-    if job["status"] == "complete":
-        resp["results"] = job["results"]
+    # Read status from database as source of truth
+    resp = {
+        "id": job_db.id,
+        "status": job_db.status,
+        "message": job_db.current_message,
+        "progress": job_db.progress,
+        "job_role": job_db.job_role,
+        "model": job_db.model,
+        "agents": get_agents_status(job_db.progress, job_db.status, job_db.current_message),
+        "is_truncated": job_db.is_truncated
+    }
+    
+    if job_db.status == 'complete' and job_db.results_json:
+        resp["results"] = json.loads(job_db.results_json)
+        
     return jsonify(resp)
 
 @app.route("/report/<jid>")
