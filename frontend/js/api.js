@@ -81,7 +81,10 @@ async function checkHealth() {
   try {
     const r = await fetch(getBase() + '/health', { signal: AbortSignal.timeout(4000) });
     const data = await r.json();
-    if (data.groq) {
+    if (data.is_mock) {
+      dot.className = 'api-dot on';
+      text.textContent = 'Simulated Mode';
+    } else if (data.groq) {
       dot.className = 'api-dot on';
       text.textContent = 'Groq Connected';
     } else {
