@@ -19,17 +19,14 @@ SET KEY:
 RUN:
   python app.py
 """
-import eventlet
-eventlet.monkey_patch()
-
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
-import os, re, time, json, uuid, threading
+import os, re, time, json, uuid, threading, traceback, logging
 
 # ── Flask ──────────────────────────────────────────────────────────────────────
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, g
 from flask_cors import CORS
 
 # ── WebSocket (Phase 5) ─────────────────────────────────────────────────────────
@@ -39,6 +36,8 @@ import bcrypt
 import jwt
 from functools import wraps
 import datetime
+from sqlalchemy.exc import OperationalError
+from sqlalchemy import text as sa_text
 
 # ── LangChain 1.2.x compatible imports ────────────────────────────────────────
 from langchain_groq import ChatGroq
@@ -47,9 +46,6 @@ from langchain_core.callbacks.base import BaseCallbackHandler
 
 # ── PDF extraction ─────────────────────────────────────────────────────────────
 from pypdf import PdfReader
-
-# ── Waitress ───────────────────────────────────────────────────────────────────
-from waitress import serve
 
 from flask import send_from_directory
 
@@ -60,24 +56,196 @@ from models import db, User, Job
 #  CONFIG
 # ════════════════════════════════════════════════════════════════════════════════
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
-CORS(app, origins="*")
 
-# Phase 5: Initialize WebSocket
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# ── CORS (Phase 2) ───────────────────────────────────────────────────────────
+# Fully environment-configurable via ALLOWED_ORIGINS comma-separated list.
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if not ALLOWED_ORIGINS:
+    raise RuntimeError(
+        "ALLOWED_ORIGINS must be set in environment, e.g. "
+        "'https://my-app.vercel.app,http://localhost:5000'"
+    )
+CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=True)
 
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'hireedge-super-secret-key')
-# Database: Hardcode SQLite for local dev
-DATABASE_URL = 'sqlite:///hireedge.db'
+# ── JWT Secret (Phase 1) ────────────────────────────────────────────────────
+# No fallback — must be set explicitly in the environment.
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY or len(SECRET_KEY) < 32:
+    raise RuntimeError("SECRET_KEY must be set in environment and be >= 32 chars")
+app.config['SECRET_KEY'] = SECRET_KEY
+
+# ── Rate Limiting (Phase 3) ─────────────────────────────────────────────────
+# In-memory only — no Redis. Limits reset on deploy/restart, acceptable for single-worker.
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+)
+
+# ── WebSocket (Phase 5) ─────────────────────────────────────────────────────
+# (eventlet monkey_patch was removed; waitress/threading is Windows-compatible)
+socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS, async_mode='threading', logger=False, engineio_logger=False)
+
+# ── Request ID Correlation (Phase 5) ────────────────────────────────────────
+# Inject X-Request-ID into every response; read incoming if provided.
+@app.before_request
+def _inject_request_id():
+    g.request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+
+@app.after_request
+def _add_request_id_header(response):
+    response.headers["X-Request-ID"] = g.request_id
+    return response
+
+# ── PDF Validation (Phase 4) ─────────────────────────────────────────────────
+MAX_PDF_SIZE = 10 * 1024 * 1024  # 10 MB absolute limit
+ALLOWED_MIME_TYPES = {"application/pdf"}
+PDF_MAGIC_HEADER = b"%PDF-"
+
+
+def _validate_pdf_file(file_storage, field_name: str):
+    """Validate an uploaded PDF file.
+
+    Checks:
+    - File exists and has a filename
+    - Non-zero size
+    - Recognizable PDF magic header (%PDF-)
+    - MIME type matches application/pdf
+    - File size under MAX_PDF_SIZE (10 MB)
+    - File extension .pdf
+
+    Raises ValueError on any failure. Returns True on success.
+    """
+    if not file_storage:
+        raise ValueError(f"{field_name} file is missing")
+    if not file_storage.filename:
+        raise ValueError(f"{field_name} has no filename")
+    # Extension check
+    if not file_storage.filename.lower().endswith(".pdf"):
+        raise ValueError(f"{field_name} must have .pdf extension (got: {file_storage.filename})")
+    # Size check — seek to end
+    file_storage.stream.seek(0, os.SEEK_END)
+    size = file_storage.stream.tell()
+    file_storage.stream.seek(0)
+    if size == 0:
+        raise ValueError(f"{field_name} is empty")
+    if size > MAX_PDF_SIZE:
+        raise ValueError(f"{field_name} exceeds {MAX_PDF_SIZE // 1024 // 1024}MB size limit (got {size // 1024 // 1024}MB)")
+    # MIME type check (best-effort from browser)
+    if file_storage.mimetype and file_storage.mimetype not in ALLOWED_MIME_TYPES:
+        logging.warning(f"[PDF] {field_name} MIME mismatch: {file_storage.mimetype}, forcing extension check")
+    # Magic header check — read first 5 bytes
+    header = file_storage.stream.read(5)
+    file_storage.stream.seek(0)
+    if not header.startswith(PDF_MAGIC_HEADER):
+        raise ValueError(f"{field_name} is not a valid PDF (missing '%PDF-' magic header)")
+    return True
+# Use absolute paths relative to backend/ so Procfile `python backend/app.py` vs `python app.py` both work
+_BACKEND_DIR = Path(__file__).resolve().parent
+UPLOAD_FOLDER  = _BACKEND_DIR / "uploads";  UPLOAD_FOLDER.mkdir(exist_ok=True)
+REPORTS_FOLDER = _BACKEND_DIR / "reports"; REPORTS_FOLDER.mkdir(exist_ok=True)
+
+# Database: respect DATABASE_URL env (Supabase Postgres on Render) else fallback to SQLite
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///hireedge.db")
+# Normalize SQLite to absolute path to avoid cwd drift (python app.py vs python backend/app.py vs gunicorn)
+if DATABASE_URL and DATABASE_URL.startswith("sqlite:///") and ":memory:" not in DATABASE_URL:
+    # sqlite:////absolute vs sqlite:///relative
+    if not DATABASE_URL.startswith("sqlite:////"):
+        rel = DATABASE_URL[len("sqlite:///"):]
+        # Only convert relative paths
+        if rel and not Path(rel).is_absolute() and "://" not in rel:
+            abs_path = (_BACKEND_DIR / rel).resolve()
+            DATABASE_URL = f"sqlite:///{abs_path.as_posix()}"
+# SQLAlchemy 2.x requires postgresql:// not postgres://
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Prevent pooled connections from going stale on Render/Supabase + timeouts
+is_postgres = DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://")
+connect_args = {"connect_timeout": 5}
+if is_postgres:
+    # Supabase requires SSL; pooler on 6543 prefers sslmode=require
+    connect_args["sslmode"] = "require"
+    # TCP keepalives help on Render free tier
+    connect_args["keepalives"] = 1
+    connect_args["keepalives_idle"] = 30
+    connect_args["keepalives_interval"] = 10
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True, "pool_recycle": 300, "connect_args": connect_args}
+
+# Configure logging to stdout (Waitress/Flask capture stdout by default)
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logging.getLogger().handlers = []  # clear existing handlers from basicConfig
+logging.getLogger().addHandler(handler)
+logging.getLogger().setLevel(logging.INFO)
+
+# Phase 3: Initialize rate limiter (in-memory only, Redis postponed)
+limiter.init_app(app)
+
+# Helper: sanitized DB host for logs (hide password)
+def _db_host_log(url: str) -> str:
+    try:
+        if "@" in url:
+            return url.split("@")[-1]
+        return url
+    except Exception:
+        return "unknown"
+
+# Allow explicit SQLite fallback when Postgres is unreachable (useful for local dev if Supabase paused)
+ALLOW_SQLITE_FALLBACK = os.environ.get("ALLOW_SQLITE_FALLBACK", "false").lower() in ("true", "1", "yes")
 
 db.init_app(app)
 
-with app.app_context():
-    db.create_all()
+# Ensure tables exist — log but don't crash on DB connection failure (shows as 500 otherwise)
+# Try primary DB first, fallback to SQLite if enabled and OperationalError occurs
+def _init_db_with_fallback():
+    global DATABASE_URL
+    try:
+        with app.app_context():
+            db.create_all()
+            # Verify connectivity with a simple query
+            db.session.execute(sa_text("SELECT 1"))
+            db.session.commit()
+            logging.info(f"[DB] connected: {_db_host_log(DATABASE_URL)}")
+            return True
+    except OperationalError as oe:
+        logging.warning(f"[DB] OperationalError on create_all: {oe}; host={_db_host_log(DATABASE_URL)}")
+        if ALLOW_SQLITE_FALLBACK and not DATABASE_URL.startswith("sqlite"):
+            fallback_path = (_BACKEND_DIR / "hireedge.db").resolve()
+            fallback_url = f"sqlite:///{fallback_path.as_posix()}"
+            logging.warning(f"[DB] Falling back to SQLite: {fallback_url} (ALLOW_SQLITE_FALLBACK=true)")
+            try:
+                # Reconfigure engine to SQLite and retry
+                app.config['SQLALCHEMY_DATABASE_URI'] = fallback_url
+                # Need to recreate engine: dispose old, clear session
+                try:
+                    db.session.remove()
+                    db.engine.dispose()
+                except Exception:
+                    pass
+                # Update global for health reporting
+                DATABASE_URL = fallback_url
+                with app.app_context():
+                    db.create_all()
+                    db.session.execute(sa_text("SELECT 1"))
+                    db.session.commit()
+                    logging.info(f"[DB] fallback SQLite connected: {fallback_url}")
+                    return True
+            except Exception as fe:
+                logging.error(f"[DB] fallback SQLite also failed: {fe}\n{traceback.format_exc()[-1200:]}")
+        else:
+            logging.warning(f"[DB] No fallback enabled. Set ALLOW_SQLITE_FALLBACK=true to use local SQLite when Supabase is unreachable. | trace: {traceback.format_exc()[-800:]}")
+        return False
+    except Exception as e:
+        logging.warning(f"[DB] create_all failed ({e}); will retry on first request. DB URL: {_db_host_log(DATABASE_URL)} | trace: {traceback.format_exc()[-800:]}")
+        return False
 
-UPLOAD_FOLDER  = Path("uploads");  UPLOAD_FOLDER.mkdir(exist_ok=True)
-REPORTS_FOLDER = Path("reports");  REPORTS_FOLDER.mkdir(exist_ok=True)
+_init_db_with_fallback()
 
 # ── Auth Middleware ────────────────────────────────────────────────────────────
 def token_required(f):
@@ -95,7 +263,25 @@ def token_required(f):
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
             current_user = User.query.filter_by(id=data['user_id']).first()
+            if not current_user:
+                return jsonify({'error': 'User not found. Please register again.'}), 401
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Token has expired. Please login again.'}), 401
+        except jwt.InvalidTokenError as e:
+            return jsonify({'error': f'Token is invalid: {str(e)}'}), 401
+        except OperationalError as oe:
+            logging.error(f"[auth] DB OperationalError: {oe}; host={_db_host_log(DATABASE_URL)}")
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            return jsonify({
+                'error': 'Database unavailable',
+                'detail': 'Could not reach database. Host may be wrong or Supabase paused. Check DATABASE_URL (use pooler host aws-0-...pooler.supabase.com:6543 with ?sslmode=require)',
+                'hint': _db_host_log(DATABASE_URL)
+            }), 503
         except Exception as e:
+            logging.warning(f"[auth] token decode failed: {e}")
             return jsonify({'error': 'Token is invalid!'}), 401
             
         return f(current_user, *args, **kwargs)
@@ -234,20 +420,32 @@ class AgentProgressCallback(BaseCallbackHandler):
             job["agents"][self.agent_index]["label"]  = f"{self.agent_name}: querying LLM..."
             job["message"] = msg
 
-        with app.app_context():
-            job_db = Job.query.filter_by(id=self.job_id).first()
-            if job_db:
-                job_db.current_message = msg
-                db.session.commit()
-                
-            # Emit SocketIO update
-            socketio.emit('job_status', {
-                'id': self.job_id,
-                'status': 'running',
-                'progress': job_db.progress if job_db else 0,
-                'message': msg,
-                'agents': job["agents"] if job else get_agents_status(job_db.progress if job_db else 0, 'running', msg)
-            }, room=self.job_id)
+        try:
+            with app.app_context():
+                job_db = Job.query.filter_by(id=self.job_id).first()
+                if job_db:
+                    job_db.current_message = msg
+                    try:
+                        db.session.commit()
+                    except Exception as e:
+                        logging.warning(f"[callback] on_llm_start commit failed: {e}")
+                        db.session.rollback()
+                    progress = job_db.progress
+                else:
+                    progress = 0
+                agents_snapshot = job["agents"] if job else get_agents_status(progress, 'running', msg)
+                try:
+                    socketio.emit('job_status', {
+                        'id': self.job_id,
+                        'status': 'running',
+                        'progress': progress,
+                        'message': msg,
+                        'agents': agents_snapshot
+                    }, room=self.job_id)
+                except Exception as e:
+                    logging.warning(f"[socketio] on_llm_start emit failed: {e}")
+        except Exception as e:
+            logging.warning(f"[callback] on_llm_start failed: {e}")
 
     def on_llm_end(self, response, **kwargs):
         job = self._job()
@@ -255,20 +453,32 @@ class AgentProgressCallback(BaseCallbackHandler):
         if job:
             job["agents"][self.agent_index]["label"] = msg
 
-        with app.app_context():
-            job_db = Job.query.filter_by(id=self.job_id).first()
-            if job_db:
-                job_db.current_message = msg
-                db.session.commit()
-                
-            # Emit SocketIO update
-            socketio.emit('job_status', {
-                'id': self.job_id,
-                'status': 'running',
-                'progress': job_db.progress if job_db else 0,
-                'message': msg,
-                'agents': job["agents"] if job else get_agents_status(job_db.progress if job_db else 0, 'running', msg)
-            }, room=self.job_id)
+        try:
+            with app.app_context():
+                job_db = Job.query.filter_by(id=self.job_id).first()
+                if job_db:
+                    job_db.current_message = msg
+                    try:
+                        db.session.commit()
+                    except Exception as e:
+                        logging.warning(f"[callback] on_llm_end commit failed: {e}")
+                        db.session.rollback()
+                    progress = job_db.progress
+                else:
+                    progress = 0
+                agents_snapshot = job["agents"] if job else get_agents_status(progress, 'running', msg)
+                try:
+                    socketio.emit('job_status', {
+                        'id': self.job_id,
+                        'status': 'running',
+                        'progress': progress,
+                        'message': msg,
+                        'agents': agents_snapshot
+                    }, room=self.job_id)
+                except Exception as e:
+                    logging.warning(f"[socketio] on_llm_end emit failed: {e}")
+        except Exception as e:
+            logging.warning(f"[callback] on_llm_end failed: {e}")
 
     def on_llm_error(self, error, **kwargs):
         job = self._job()
@@ -1164,28 +1374,42 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
         if report_str is not None: job["report"] = report_str
         job["agents"] = get_agents_status(progress_val, status_str, msg_str)
         
-        with app.app_context():
-            job_db = Job.query.filter_by(id=job_id).first()
-            user = User.query.filter_by(id=user_id).first()
-            if job_db:
-                job_db.status = status_str
-                job_db.progress = progress_val
-                job_db.current_message = msg_str
-                if results_dict is not None: job_db.results_json = json.dumps(results_dict)
-                if report_str is not None: job_db.report_content = report_str
-                if is_truncated_val: job_db.is_truncated = True
-                
-                # Increment free use ONLY on successful completion!
-                if inc_analyses_used and user and user.subscription_tier == 'free':
-                    user.free_analyses_used += 1
+        is_truncated_emit = False
+        try:
+            with app.app_context():
+                job_db = Job.query.filter_by(id=job_id).first()
+                user = User.query.filter_by(id=user_id).first()
+                if job_db:
+                    job_db.status = status_str
+                    job_db.progress = progress_val
+                    job_db.current_message = msg_str
+                    if results_dict is not None: job_db.results_json = json.dumps(results_dict)
+                    if report_str is not None: job_db.report_content = report_str
+                    if is_truncated_val: job_db.is_truncated = True
                     
-                if status_str == 'complete':
-                    job_db.analysis_number = Job.query.filter_by(user_id=user_id).count()
-                    job_db.user_tier_at_time = user.subscription_tier if user else 'free'
+                    # Increment free use ONLY on successful completion!
+                    if inc_analyses_used and user and user.subscription_tier == 'free':
+                        user.free_analyses_used += 1
+                        
+                    if status_str == 'complete':
+                        job_db.analysis_number = Job.query.filter_by(user_id=user_id).count()
+                        job_db.user_tier_at_time = user.subscription_tier if user else 'free'
                     
-                db.session.commit()
+                    is_truncated_emit = bool(job_db.is_truncated)
+                    db.session.commit()
+                else:
+                    is_truncated_emit = is_truncated_val
+        except Exception as e:
+            logging.error(f"[update_status] DB commit failed for {job_id}: {e}\n{traceback.format_exc()}")
+            try:
+                with app.app_context():
+                    db.session.rollback()
+            except Exception:
+                pass
+            is_truncated_emit = is_truncated_val
                 
-            # Emit SocketIO update
+        # Emit SocketIO update — never let emit crash the job (threading mode)
+        try:
             socketio.emit('job_status', {
                 'id': job_id,
                 'status': status_str,
@@ -1193,8 +1417,10 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
                 'message': msg_str,
                 'agents': job["agents"],
                 'results': results_dict,
-                'is_truncated': job_db.is_truncated if job_db else False
+                'is_truncated': is_truncated_emit
             }, room=job_id)
+        except Exception as e:
+            logging.warning(f"[socketio] emit failed for {job_id}: {e}")
 
     try:
         update_status("running", 0, "Extracting text from PDFs...")
@@ -1257,25 +1483,38 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
         update_status("complete", 6, "Analysis complete.", results_dict=results_to_save, report_str=report, is_truncated_val=is_truncated, inc_analyses_used=True)
 
     except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(f"[run_job] {job_id} failed: {e}\n{tb}")
         job["status"] = "error"
         job["message"] = str(e)
         job["agents"] = get_agents_status(job["progress"], "error", str(e))
         
-        with app.app_context():
-            job_db = Job.query.filter_by(id=job_id).first()
-            if job_db:
-                job_db.status = 'error'
-                job_db.current_message = str(e)
-                db.session.commit()
+        try:
+            with app.app_context():
+                job_db = Job.query.filter_by(id=job_id).first()
+                if job_db:
+                    job_db.status = 'error'
+                    job_db.current_message = str(e)[:250]
+                    db.session.commit()
+        except Exception as db_e:
+            logging.error(f"[run_job] failed to persist error state: {db_e}")
+            try:
+                with app.app_context():
+                    db.session.rollback()
+            except Exception:
+                pass
         
-        # Emit error status via Socket.IO
-        socketio.emit('job_status', {
-            'id': job_id,
-            'status': 'error',
-            'progress': job["progress"],
-            'message': str(e),
-            'agents': job["agents"]
-        }, room=job_id)
+        # Emit error status via Socket.IO — don't crash if emit fails
+        try:
+            socketio.emit('job_status', {
+                'id': job_id,
+                'status': 'error',
+                'progress': job["progress"],
+                'message': str(e),
+                'agents': job["agents"]
+            }, room=job_id)
+        except Exception as emit_e:
+            logging.warning(f"[socketio] error emit failed: {emit_e}")
         
     finally:
         try:
@@ -1300,13 +1539,44 @@ def serve_index():
 def health():
     is_mock = os.environ.get("MOCK_LLM", "false").lower() in ("true", "1", "yes")
     ok = (GROQ_API_KEY not in ("", "YOUR_GROQ_API_KEY_HERE") and len(GROQ_API_KEY) > 20) or is_mock
-    return jsonify({
-        "status":   "ok",
+    # Test DB connectivity — do not leak password, just host + status
+    db_ok = False
+    db_error = None
+    try:
+        with app.app_context():
+            db.session.execute(sa_text("SELECT 1"))
+            db.session.commit()
+            db_ok = True
+    except OperationalError as oe:
+        db_error = f"OperationalError: {str(oe)[:300]}"
+        logging.warning(f"[health] DB OperationalError: {oe}; host={_db_host_log(DATABASE_URL)}")
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+    except Exception as e:
+        db_error = str(e)[:300]
+        logging.warning(f"[health] DB error: {e}")
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+    payload = {
+        "status":   "ok" if db_ok else "degraded",
         "groq":     ok,
         "is_mock":  is_mock,
         "version":  "3.0-waitress",
         "groq_msg": "Simulated Mode active" if is_mock else ("Groq API key configured" if ok else "Set GROQ_API_KEY env variable"),
-    })
+        "db":       db_ok,
+        "db_host":  _db_host_log(DATABASE_URL),
+    }
+    if db_error:
+        payload["db_error"] = db_error
+        payload["hint"] = "Check DATABASE_URL host (Supabase pooler uses aws-0-...pooler.supabase.com:6543 with sslmode=require) or set ALLOW_SQLITE_FALLBACK=true"
+    # Return 503 if DB down so monitoring catches it, but still JSON for frontend parseJsonSafe
+    status_code = 200 if db_ok else 503
+    return jsonify(payload), status_code
 
 
 @app.route("/models")
@@ -1317,41 +1587,105 @@ def list_models():
 
 @app.route("/api/register", methods=["POST"])
 def register():
-    data = request.get_json()
-    if not data or not data.get('email') or not data.get('password'):
-        return jsonify({'error': 'Email and password required'}), 400
+    try:
+        data = request.get_json(silent=True)
+        if not data or not data.get('email') or not data.get('password'):
+            return jsonify({'error': 'Email and password required'}), 400
         
-    if User.query.filter_by(email=data['email']).first():
-        return jsonify({'error': 'User already exists'}), 400
+        email = data['email'].strip().lower()
+        password = data['password']
         
-    hashed_password = bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-    
-    new_user = User(email=data['email'], password_hash=hashed_password)
-    db.session.add(new_user)
-    db.session.commit()
-    
-    return jsonify({'message': 'User created successfully!'}), 201
+        # Validation
+        if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+            return _error_response("VALIDATION_ERROR", "Invalid email format")
+        if len(password) < 6:
+            return _error_response("VALIDATION_ERROR", "Password must be at least 6 characters")
+        if len(password.encode('utf-8')) > 72:
+            return _error_response("VALIDATION_ERROR", "Password too long (max 72 bytes for bcrypt)")
+        
+        if User.query.filter_by(email=email).first():
+            return _error_response("CONFLICT", "User already exists")
+        
+        try:
+            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        except Exception as e:
+            logging.error(f"[register] bcrypt hash failed for {email}: {e}\n{traceback.format_exc()}")
+            return _error_response("INTERNAL_ERROR", "Password hashing failed", detail=str(e))
+        
+        new_user = User(email=email, password_hash=hashed_password)
+        db.session.add(new_user)
+        db.session.commit()
+        
+        return jsonify({"message": "User created successfully!", "request_id": g.request_id}), 201
+    except OperationalError as oe:
+        tb = traceback.format_exc()
+        logging.error(f"[register] OperationalError for {data.get('email') if 'data' in locals() and data else 'unknown'}: {oe}; host={_db_host_log(DATABASE_URL)}\n{tb[-1200:]}")
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return _error_response("DB_UNAVAILABLE", "Database unavailable",
+                             detail=f"Could not reach database host {_db_host_log(DATABASE_URL)}. Check DATABASE_URL (use Supabase pooler host aws-0-...pooler.supabase.com:6543 with sslmode=require) or set ALLOW_SQLITE_FALLBACK=true for local dev.", status=503)
+    except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(f"[register] 500 for {data.get('email') if 'data' in locals() and data else 'unknown'}: {e}\n{tb}")
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return _error_response("INTERNAL_ERROR", "Registration failed", detail=str(e) if os.environ.get("FLASK_ENV") == "development" else "Registration failed"), 500
 
 @app.route("/api/login", methods=["POST"])
 def login():
-    data = request.get_json()
-    if not data or not data.get('email') or not data.get('password'):
-        return jsonify({'error': 'Email and password required'}), 400
+    try:
+        data = request.get_json(silent=True)
+        if not data or not data.get('email') or not data.get('password'):
+            return _error_response("VALIDATION_ERROR", "Email and password required")
         
-    user = User.query.filter_by(email=data['email']).first()
-    
-    if not user or not bcrypt.checkpw(data['password'].encode('utf-8'), user.password_hash.encode('utf-8')):
-        return jsonify({'error': 'Invalid credentials'}), 401
+        email = data['email'].strip().lower()
+        password = data['password']
         
-    token = jwt.encode({
-        'user_id': user.id,
-        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-    }, app.config['SECRET_KEY'], algorithm="HS256")
-    
-    return jsonify({
-        'token': token,
-        'user': {'email': user.email, 'id': user.id, 'tier': user.subscription_tier}
-    })
+        user = User.query.filter_by(email=email).first()
+        
+        if not user:
+            return _error_response("UNAUTHORIZED", "Invalid credentials")
+        
+        try:
+            pw_ok = bcrypt.checkpw(password.encode('utf-8'), user.password_hash.encode('utf-8'))
+        except Exception as e:
+            logging.error(f"[login] bcrypt check failed for {email}: {e}\n{traceback.format_exc()}")
+            return _error_response("UNAUTHORIZED", "Invalid credentials")
+        
+        if not pw_ok:
+            return _error_response("UNAUTHORIZED", "Invalid credentials")
+            
+        token = jwt.encode({
+            'user_id': user.id,
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+        }, app.config['SECRET_KEY'], algorithm="HS256")
+        
+        return jsonify({
+            'token': token,
+            'user': {'email': user.email, 'id': user.id, 'tier': user.subscription_tier},
+            'request_id': g.request_id
+        })
+    except OperationalError as oe:
+        tb = traceback.format_exc()
+        logging.error(f"[login] OperationalError: {oe}; host={_db_host_log(DATABASE_URL)}\n{tb[-1200:]}")
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return _error_response("DB_UNAVAILABLE", "Database unavailable",
+                             detail=f"Could not reach database host {_db_host_log(DATABASE_URL)}. Check DATABASE_URL (use Supabase pooler host aws-0-...pooler.supabase.com:6543 with sslmode=require) or set ALLOW_SQLITE_FALLBACK=true for local dev.", status=503)
+    except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(f"[login] 500: {e}\n{tb}")
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return _error_response("INTERNAL_ERROR", "Login failed", detail=str(e)), 500
 
 @app.route("/api/me", methods=["GET"])
 @token_required
@@ -1370,11 +1704,12 @@ def upgrade_user(current_user):
         db.session.commit()
         return jsonify({
             'message': 'Upgraded to premium successfully!',
-            'tier': current_user.subscription_tier
+            'tier': current_user.subscription_tier,
+            'request_id': g.request_id
         })
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return _error_response("INTERNAL_ERROR", "Failed to upgrade", detail=str(e)), 500
 
 @app.route("/api/my-reports", methods=["GET"])
 @token_required
@@ -1384,7 +1719,8 @@ def get_my_reports(current_user):
         'id': r.id,
         'job_role': r.job_role,
         'status': r.status,
-        'created_at': r.created_at.isoformat()
+        'created_at': r.created_at.isoformat(),
+        'request_id': g.request_id
     } for r in reports])
 
 @app.route("/analyse", methods=["POST"])
@@ -1392,13 +1728,21 @@ def get_my_reports(current_user):
 def analyse(current_user):
     # Freemium Check
     if current_user.subscription_tier == 'free' and current_user.free_analyses_used >= 3:
-        return jsonify({"error": "Free limit reached. Please upgrade to premium."}), 403
+        return _error_response("FORBIDDEN", "Free limit reached. Please upgrade to premium.", status=403)
 
     if "candidate_pdf" not in request.files or "hr_pdf" not in request.files:
-        return jsonify({"error": "Both candidate_pdf and hr_pdf required."}), 400
+        return _error_response("VALIDATION_ERROR", "Both candidate_pdf and hr_pdf required.")
+
+    # ── PDF Validation (Phase 4) ─────────────────────────────────────────────
+    try:
+        _validate_pdf_file(request.files["candidate_pdf"], "candidate_pdf")
+        _validate_pdf_file(request.files["hr_pdf"], "hr_pdf")
+    except ValueError as e:
+        return _error_response("VALIDATION_ERROR", str(e))
+
     role = request.form.get("job_role", "").strip()
     if not role:
-        return jsonify({"error": "job_role required."}), 400
+        return _error_response("VALIDATION_ERROR", "job_role required.")
     model  = request.form.get("model", DEFAULT_MODEL).strip()
     jid    = str(uuid.uuid4())
     c_path = UPLOAD_FOLDER / f"{jid}_candidate.pdf"
@@ -1444,7 +1788,7 @@ def job_status(current_user, jid):
     job_db = Job.query.filter_by(id=jid, user_id=current_user.id).first()
     
     if not job_db:
-        return jsonify({"error": "Not found or access denied."}), 404
+        return _error_response("NOT_FOUND", "Not found or access denied.", status=404)
         
     # Read status from database as source of truth
     resp = {
@@ -1461,17 +1805,88 @@ def job_status(current_user, jid):
     if job_db.status == 'complete' and job_db.results_json:
         resp["results"] = json.loads(job_db.results_json)
         
-    return jsonify(resp)
+    return jsonify({**resp, "request_id": g.request_id})
 
 @app.route("/report/<jid>")
 @token_required
 def download_report(current_user, jid):
     job_db = Job.query.filter_by(id=jid, user_id=current_user.id).first()
     if not job_db or job_db.status != "complete": 
-        return jsonify({"error": "Not found or not ready."}), 404
+        return _error_response("NOT_FOUND", "Not found or not ready.", status=404)
     
     return Response(job_db.report_content, mimetype="text/plain",
-        headers={"Content-Disposition": f"attachment; filename=hireedge_{jid[:8]}.txt"})
+        headers={"Content-Disposition": f"attachment; filename=hireedge_{jid[:8]}.txt",
+                 "X-Request-ID": g.request_id})
+# ── JSON error handlers (prevent <!doctype HTML on API 404/405/500) ─────────────
+_API_PREFIXES = ("/api/", "/health", "/models", "/analyse", "/status/", "/report/")
+
+
+def _is_api_path(path: str) -> bool:
+    return path.startswith(_API_PREFIXES)
+
+
+def _error_response(error_code: str, message: str, detail: str = None, status: int = None) -> tuple:
+    """Standardized JSON error response including request_id.
+
+    Schema (all API errors):
+    {
+        "error":    error_code,     e.g. "VALIDATION_ERROR", "UNAUTHORIZED"
+        "message":  message,       e.g. "Email format invalid"
+        "detail":   detail,        e.g. "regex mismatch at position 5"  (optional)
+        "request_id": request_id   from flask.g
+    }
+    Status defaults to ERROR_MAP[error_code] if not provided.
+    """
+    rid = getattr(g, "request_id", None)
+    payload = {"error": error_code, "message": message, "request_id": rid}
+    if detail is not None:
+        payload["detail"] = detail
+    if status is None:
+        # Default mapping
+        defaults = {
+            "VALIDATION_ERROR": 400,
+            "UNAUTHORIZED": 401,
+            "FORBIDDEN": 403,
+            "NOT_FOUND": 404,
+            "CONFLICT": 409,
+            "RATE_LIMITED": 429,
+            "DB_UNAVAILABLE": 503,
+            "INTERNAL_ERROR": 500,
+        }
+        status = defaults.get(error_code, 500)
+    payload["status"] = status
+    return jsonify(payload), status
+
+
+@app.errorhandler(404)
+def handle_404(e):
+    if _is_api_path(request.path):
+        return _error_response("NOT_FOUND", "Not found", detail=request.path, status=404)
+    accepts_html = "text/html" in (request.headers.get("Accept") or "")
+    if accepts_html and not _is_api_path(request.path):
+        try:
+            return send_from_directory(FRONTEND_DIR, "index.html")
+        except Exception:
+            pass
+    return _error_response("NOT_FOUND", "Not found", status=404)
+
+
+@app.errorhandler(405)
+def handle_405(e):
+    if _is_api_path(request.path):
+        return _error_response("CONFLICT", "Method not allowed", detail=request.path, status=405)
+    return _error_response("CONFLICT", "Method not allowed", status=405)
+
+
+@app.errorhandler(500)
+def handle_500(e):
+    tb = traceback.format_exc()
+    logging.error(f"[500] {request.path}: {e}\n{tb}")
+    is_debug = os.environ.get("FLASK_ENV") == "development" or os.environ.get("MOCK_LLM", "").lower() in ("true", "1")
+    if is_debug or _is_api_path(request.path):
+        detail = str(e) if str(e) and str(e) != "500 Internal Server Error" else (tb.splitlines()[-1] if tb else "Internal server error")
+        return _error_response("INTERNAL_ERROR", "Internal server error", detail=detail, status=500)
+    return _error_response("INTERNAL_ERROR", "Internal server error", status=500)
 
 
 # ════════════════════════════════════════════════════════════════════════════════

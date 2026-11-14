@@ -1,5 +1,16 @@
 {
   "rootDirectory": "frontend",
   "cleanUrls": true,
-  "trailingSlash": false
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://hireedge-backend.onrender.com/api/:path*" },
+    { "source": "/health", "destination": "https://hireedge-backend.onrender.com/health" },
+    { "source": "/models", "destination": "https://hireedge-backend.onrender.com/models" },
+    { "source": "/analyse", "destination": "https://hireedge-backend.onrender.com/analyse" },
+    { "source": "/status/:path*", "destination": "https://hireedge-backend.onrender.com/status/:path*" },
+    { "source": "/report/:path*", "destination": "https://hireedge-backend.onrender.com/report/:path*" }
+  ],
+  "env": {
+    "BACKEND_URL": "https://hireedge-backend.onrender.com"
+  }
 }

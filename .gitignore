@@ -18,6 +18,8 @@ backend/instance/
 # HireEdge runtime folders
 backend/uploads/
 backend/reports/
+backend.err
+backend.log
 
 # Node
 node_modules/

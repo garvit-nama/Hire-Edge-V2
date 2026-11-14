@@ -23,7 +23,7 @@ class Job(db.Model):
     progress = db.Column(db.Integer, default=0)
     current_message = db.Column(db.String(255), default='Queued')
     report_content = db.Column(db.Text, nullable=True) # The generated text report
-    results_json = db.Column(db.String, nullable=True) # Stored JSON of individual agent outputs
+    results_json = db.Column(db.Text, nullable=True) # Stored JSON of individual agent outputs (Text, not String(255))
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     
     # Freemium tier tracking (Phase 3)

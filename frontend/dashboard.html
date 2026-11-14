@@ -114,7 +114,8 @@
 
       try {
         const r = await fetch(getBase() + '/api/my-reports', { headers: getHeaders() });
-        const reports = await r.json();
+        const reports = await parseJsonSafe(r);
+        if (!r.ok) throw new Error(reports.error || `HTTP ${r.status}`);
         
         const grid = document.getElementById('reportsGrid');
         if (!reports || reports.length === 0) {
@@ -134,7 +135,8 @@
         `).join('');
 
       } catch (e) {
-        toast('❌', 'Failed to load history');
+        console.warn('[dashboard]', e.message);
+        toast('❌', e.message.includes('HTML instead of JSON') ? 'Backend offline or URL wrong — check backendUrl' : 'Failed to load history: ' + e.message);
       }
     }
 

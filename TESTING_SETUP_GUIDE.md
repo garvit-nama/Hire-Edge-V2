@@ -1,4 +1,4 @@
-# Phase 6: Testing & QA Setup Guide
+  # Phase 6: Testing & QA Setup Guide
 
 This guide covers setting up the testing infrastructure for HireEdge. Dependencies have been added to `requirements.txt` (backend) and staged. This document provides step-by-step instructions to create test suites and CI/CD pipelines.
 

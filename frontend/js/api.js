@@ -2,8 +2,24 @@
 function getBase() {
   const el = document.getElementById('backendUrl');
   if (el?.value?.trim()) return el.value.trim().replace(/\/$/, '');
+  // Vercel / build-time injection: window.BACKEND_URL or window.__BACKEND_URL__
+  if (typeof window !== 'undefined') {
+    if (window.BACKEND_URL?.trim()) return window.BACKEND_URL.trim().replace(/\/$/, '');
+    if (window.__BACKEND_URL__?.trim()) return window.__BACKEND_URL__.trim().replace(/\/$/, '');
+  }
+  // Dev override via localStorage (e.g. localStorage.setItem('backendUrl','http://localhost:5000'))
+  try {
+    const ls = localStorage.getItem('backendUrl');
+    if (ls?.trim()) return ls.trim().replace(/\/$/, '');
+  } catch {}
   if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
     return 'http://localhost:5000';
+  }
+  // If not on Vercel (e.g. Flask directly serves frontend at same origin), use same origin
+  if (!location.hostname.includes('vercel.app') && !location.hostname.includes('netlify.app')) {
+    // Heuristic: same-origin backend — use current origin (works for Render serving frontend/)
+    // Only if origin is not a static-only host. Keep fallback to Render URL if origin is file://
+    if (location.protocol.startsWith('http')) return location.origin.replace(/\/$/, '');
   }
   return 'https://hireedge-backend.onrender.com';
 }
@@ -12,6 +28,45 @@ function getHeaders() {
   const headers = {};
   if (S.token) headers['Authorization'] = `Bearer ${S.token}`;
   return headers;
+}
+
+/**
+ * Safely parse JSON — throws a human-readable error if server returned HTML
+ * (e.g. Vercel 404 page, Render wake-up interstitial, Flask 404 HTML) instead of JSON.
+ * Prevents:  Unexpected token '<', "<!doctype ..." is not valid JSON
+ */
+async function parseJsonSafe(response) {
+  const ct = (response.headers.get('content-type') || '').toLowerCase();
+  const isJson = ct.includes('application/json') || ct.includes('json');
+
+  if (!isJson) {
+    const text = await response.text();
+    const trimmed = text.trim();
+    if (/^<!doctype/i.test(trimmed) || /^<html/i.test(trimmed)) {
+      throw new Error(
+        `Server returned HTML instead of JSON (HTTP ${response.status} ${response.statusText}). ` +
+        `Backend at ${getBase()} may be offline, sleeping, or URL is wrong. Try again in 20-30s (Render cold start) or check backendUrl.`
+      );
+    }
+    // Not HTML but also not JSON — try to parse as JSON anyway for tolerance
+    if (trimmed) {
+      try { return JSON.parse(trimmed); } catch {}
+    }
+    throw new Error(trimmed.slice(0, 400) || `Unexpected response (HTTP ${response.status} ${response.statusText})`);
+  }
+
+  // Content-Type says JSON — but body may still be HTML on some mis-configured 404s
+  const text = await response.text();
+  if (/^<!doctype/i.test(text.trim()) || /^<html/i.test(text.trim())) {
+    throw new Error(
+      `Server returned HTML instead of JSON (HTTP ${response.status}). Backend at ${getBase()} is not serving the API.`
+    );
+  }
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch (e) {
+    throw new Error(`Invalid JSON response: ${e.message}`);
+  }
 }
 
 let toastT;
@@ -26,6 +81,15 @@ function toast(icon, msg) {
 }
 
 // ── auth ───────────────────────────────────────────────────────────────────────
+function _formatApiError(d, fallback) {
+  // Prefer structured 503 detail (DB unavailable) over raw psycopg2
+  if (d && d.error === 'Database unavailable') {
+    return `${d.error}: ${d.detail || ''} ${d.hint ? '(' + d.hint + ')' : ''}`.trim();
+  }
+  if (d && d.detail) return `${d.error}: ${d.detail}`;
+  return (d && d.error) || fallback;
+}
+
 async function login(email, password) {
   try {
     const r = await fetch(getBase() + '/api/login', {
@@ -33,8 +97,14 @@ async function login(email, password) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'Login failed');
+    const d = await parseJsonSafe(r);
+    if (!r.ok) {
+      // Special UX for DB-down 503
+      if (r.status === 503 || (d && d.error === 'Database unavailable')) {
+        throw new Error(_formatApiError(d, 'Database unavailable — check DATABASE_URL (Supabase pooler) or set ALLOW_SQLITE_FALLBACK=true'));
+      }
+      throw new Error(_formatApiError(d, 'Login failed'));
+    }
     
     S.token = d.token;
     S.user = d.user;
@@ -43,6 +113,7 @@ async function login(email, password) {
     toast('🔑', 'Logged in!');
     return true;
   } catch (e) {
+    console.warn('[login]', e.message);
     toast('❌', e.message);
     return false;
   }
@@ -55,11 +126,17 @@ async function register(email, password) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'Registration failed');
+    const d = await parseJsonSafe(r);
+    if (!r.ok) {
+      if (r.status === 503 || (d && d.error === 'Database unavailable')) {
+        throw new Error(_formatApiError(d, 'Database unavailable — check DATABASE_URL (Supabase pooler) or set ALLOW_SQLITE_FALLBACK=true'));
+      }
+      throw new Error(_formatApiError(d, 'Registration failed'));
+    }
     toast('✅', 'Registered! Please login.');
     return true;
   } catch (e) {
+    console.warn('[register]', e.message);
     toast('❌', e.message);
     return false;
   }
@@ -80,7 +157,17 @@ async function checkHealth() {
   if (!dot || !text) return;
   try {
     const r = await fetch(getBase() + '/health', { signal: AbortSignal.timeout(4000) });
-    const data = await r.json();
+    const data = await parseJsonSafe(r);
+    // Health now returns 503 when DB down — still JSON, handle explicitly
+    if (data.db === false) {
+      dot.className = 'api-dot off';
+      text.textContent = 'DB Offline';
+      console.warn('[health] DB offline:', data.db_error, 'hint:', data.hint, 'host:', data.db_host);
+      // Still fetch models if Groq ok, but surface DB issue
+      if (data.db_error) toast('⚠️', 'Database offline: ' + (data.db_error.slice(0,80)));
+      return;
+    }
+    if (!r.ok) throw new Error(data.error || 'Health check failed');
     if (data.is_mock) {
       dot.className = 'api-dot on';
       text.textContent = 'Simulated Mode';
@@ -92,8 +179,11 @@ async function checkHealth() {
       text.textContent = 'API Key Missing';
     }
     fetchModels();
-  } catch {
+  } catch (e) {
     dot.className = 'api-dot off';
+    // Distinguish HTML-vs-offline for debuggability (console)
+    if (String(e.message).includes('HTML instead of JSON')) console.warn('[health]', e.message);
+    else if (String(e.message).includes('Database unavailable')) console.warn('[health] DB unavailable:', e.message);
     text.textContent = 'Backend Offline';
   }
 }
@@ -101,7 +191,7 @@ async function checkHealth() {
 async function fetchModels() {
   try {
     const r = await fetch(getBase() + '/models');
-    const data = await r.json();
+    const data = await parseJsonSafe(r);
     if (!data.models?.length) return;
     const chips = document.getElementById('modelChips');
     if (!chips) return;
@@ -111,7 +201,10 @@ async function fetchModels() {
        </button>`
     ).join('');
     if (S) S.model = data.models[0].id;
-  } catch { /* keep defaults */ }
+  } catch (e) {
+    if (String(e.message).includes('HTML instead of JSON')) console.warn('[models]', e.message);
+    /* keep defaults */
+  }
 }
 
 // ── submit analysis ────────────────────────────────────────────────────────────
@@ -145,7 +238,7 @@ async function startAnalysis() {
       headers: getHeaders(), // Note: FormData handles its own multipart boundary, so just add Auth
       body: fd 
     });
-    const data = await r.json();
+    const data = await parseJsonSafe(r);
     if (!r.ok) {
       if (r.status === 403) {
         showFreemiumLimit();
@@ -341,26 +434,26 @@ function closeUpgradeModal() {
   if (style) style.remove();
 }
 
-function simulateUpgrade() {
+async function simulateUpgrade() {
   const btn = document.querySelector('.upgrade-btn-primary');
-  btn.disabled = true;
-  btn.innerHTML = `<span>Upgrading...</span>`;
+  if (btn) { btn.disabled = true; btn.innerHTML = `<span>Upgrading...</span>`; }
 
-  fetch(getBase() + '/api/upgrade', {
-    method: 'POST',
-    headers: getHeaders()
-  })
-  .then(r => {
-    if (!r.ok) throw new Error('Upgrade request failed');
-    return r.json();
-  })
-  .then(data => {
+  try {
+    const r = await fetch(getBase() + '/api/upgrade', {
+      method: 'POST',
+      headers: getHeaders()
+    });
+    const data = await parseJsonSafe(r);
+    if (!r.ok) throw new Error(data.error || 'Upgrade request failed');
+
     if (S.user) {
       S.user.tier = 'premium';
       localStorage.setItem('user', JSON.stringify(S.user));
     }
-    btn.innerHTML = `<span>✓ Upgrade Complete!</span>`;
-    btn.style.background = 'linear-gradient(135deg, #22c55e, #4ade80)';
+    if (btn) {
+      btn.innerHTML = `<span>✓ Upgrade Complete!</span>`;
+      btn.style.background = 'linear-gradient(135deg, #22c55e, #4ade80)';
+    }
 
     setTimeout(() => {
       closeUpgradeModal();
@@ -370,12 +463,10 @@ function simulateUpgrade() {
         window.location.reload();
       }
     }, 1000);
-  })
-  .catch(err => {
-    btn.disabled = false;
-    btn.innerHTML = `<span>Upgrade to Premium</span>`;
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.innerHTML = `<span>Upgrade to Premium</span><span class="upgrade-price">$9.99/mo</span>`; }
     toast('❌', 'Upgrade failed: ' + err.message);
-  });
+  }
 }
 
 // ── WebSocket Real-time Updates (Phase 5) ──────────────────────────────────────
@@ -460,7 +551,8 @@ function initWebSocket() {
 async function pollJob(jid) {
   try {
     const r = await fetch(getBase() + `/status/${jid}`, { headers: getHeaders() });
-    const d = await r.json();
+    const d = await parseJsonSafe(r);
+    if (!r.ok) throw new Error(d.error || `Status ${r.status}`);
     updateAgentBoard(d);
     
     // Phase 3-4: Store metadata for freemium truncation
@@ -481,6 +573,13 @@ async function pollJob(jid) {
       showError(d.message); 
     }
   } catch (e) { 
+    // Don't kill polling on transient HTML error — surface but keep retrying once
+    if (String(e.message).includes('HTML instead of JSON')) {
+      console.warn('[pollJob] HTML response — backend may be waking up:', e.message);
+      // keep polling; show gentle message once
+      // showError would reset UI and clear interval; avoid that for transient wake-up
+      return;
+    }
     clearInterval(S.pollInterval); 
     showError('Lost connection: ' + e.message); 
   }
@@ -506,7 +605,7 @@ async function loadArchivedJob(jid) {
   
   try {
     const r = await fetch(getBase() + `/status/${jid}`, { headers: getHeaders() });
-    const d = await r.json();
+    const d = await parseJsonSafe(r);
     if (!r.ok) throw new Error(d.error || 'Failed to load report');
     
     updateAgentBoard(d);
@@ -548,7 +647,27 @@ async function downloadReport() {
   if (!S.jobId) return;
   try {
     const r = await fetch(getBase() + `/report/${S.jobId}`, { headers: getHeaders() });
-    if (!r.ok) { toast('❌', 'Download failed: ' + (r.status === 401 ? 'Unauthorized' : 'Server error')); return; }
+    // Report endpoint returns text/plain on success, JSON on error
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    if (!r.ok) {
+      // Error body should be JSON; handle HTML case
+      let msg = `Server error (${r.status})`;
+      if (ct.includes('json')) {
+        try { const j = await r.json(); msg = j.error || msg; } catch {}
+      } else {
+        const txt = await r.text();
+        if (/^<!doctype/i.test(txt.trim()) || /^<html/i.test(txt.trim())) {
+          msg = `Backend returned HTML (HTTP ${r.status}). Check backend URL ${getBase()}`;
+        } else if (txt.trim()) msg = txt.trim().slice(0,200);
+      }
+      toast('❌', 'Download failed: ' + msg);
+      return;
+    }
+    if (ct.includes('json')) {
+      // Unexpected JSON on success path (e.g., error disguised as 200)
+      const j = await parseJsonSafe(r);
+      if (j.error) { toast('❌', j.error); return; }
+    }
     const blob = await r.blob();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
