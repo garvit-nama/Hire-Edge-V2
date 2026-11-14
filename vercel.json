@@ -1,5 +1,4 @@
 {
-  "rootDirectory": "frontend",
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
@@ -9,8 +8,5 @@
     { "source": "/analyse", "destination": "https://hireedge-backend.onrender.com/analyse" },
     { "source": "/status/:path*", "destination": "https://hireedge-backend.onrender.com/status/:path*" },
     { "source": "/report/:path*", "destination": "https://hireedge-backend.onrender.com/report/:path*" }
-  ],
-  "env": {
-    "BACKEND_URL": "https://hireedge-backend.onrender.com"
-  }
+  ]
 }
