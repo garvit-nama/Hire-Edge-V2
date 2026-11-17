@@ -169,10 +169,7 @@ function updateUserUI() {
     navContainer.innerHTML = `
       <div class="user-pill">
         <span class="user-email">${S.user.email}</span>
-        <div class="user-actions">
-          <a href="dashboard.html" class="user-link">History</a>
-          <button onclick="logout()" class="user-logout">Logout</button>
-        </div>
+        <a href="dashboard.html" class="user-link">History</a>
       </div>
     `;
   } else {
@@ -183,9 +180,34 @@ function updateUserUI() {
   }
 }
 
+// ── Footer User UI ─────────────────────────────────────────────────────────────
+function updateFooterUI() {
+  const footer = document.getElementById('footerAuth');
+  if (!footer) return;
+
+  // Guard: inconsistent state — token present but no user → force re-login
+  if (S.token && !S.user) {
+    S.token = null;
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    footer.innerHTML = '';
+    return;
+  }
+
+  if (S.user) {
+    footer.innerHTML = `
+      <span class="footer-email">${S.user.email}</span>
+      <button onclick="logout()" class="user-logout">Logout</button>
+    `;
+  } else {
+    footer.innerHTML = '';
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────────
 checkHealth();
 updateUserUI();
+updateFooterUI();
 setInterval(checkHealth, 20000);
 
 // Parse URL parameter and load archived report if present

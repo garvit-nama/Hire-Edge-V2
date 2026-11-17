@@ -95,7 +95,8 @@ async function login(email, password) {
     const r = await fetch(getBase() + '/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, password }),
+      signal: AbortSignal.timeout(10000)
     });
     const d = await parseJsonSafe(r);
     if (!r.ok) {
@@ -111,6 +112,7 @@ async function login(email, password) {
     localStorage.setItem('token', d.token);
     localStorage.setItem('user', JSON.stringify(d.user));
     toast('🔑', 'Logged in!');
+    try { updateFooterUI(); } catch {}
     return true;
   } catch (e) {
     console.warn('[login]', e.message);
@@ -124,7 +126,8 @@ async function register(email, password) {
     const r = await fetch(getBase() + '/api/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, password }),
+      signal: AbortSignal.timeout(10000)
     });
     const d = await parseJsonSafe(r);
     if (!r.ok) {
@@ -143,10 +146,15 @@ async function register(email, password) {
 }
 
 function logout() {
+  if (!confirm('Are you sure you want to log out?')) return;
+
   S.token = null;
   S.user = null;
   localStorage.removeItem('token');
   localStorage.removeItem('user');
+
+  try { updateFooterUI(); } catch {}
+  toast('👋', 'Logged out');
   window.location.href = 'index.html';
 }
 
@@ -156,7 +164,7 @@ async function checkHealth() {
   const text = document.getElementById('apiText');
   if (!dot || !text) return;
   try {
-    const r = await fetch(getBase() + '/health', { signal: AbortSignal.timeout(4000) });
+    const r = await fetch(getBase() + '/health', { signal: AbortSignal.timeout(15000) });
     const data = await parseJsonSafe(r);
     // Health now returns 503 when DB down — still JSON, handle explicitly
     if (data.db === false) {
@@ -190,7 +198,7 @@ async function checkHealth() {
 
 async function fetchModels() {
   try {
-    const r = await fetch(getBase() + '/models');
+    const r = await fetch(getBase() + '/models', { signal: AbortSignal.timeout(5000) });
     const data = await parseJsonSafe(r);
     if (!data.models?.length) return;
     const chips = document.getElementById('modelChips');
@@ -240,10 +248,6 @@ async function startAnalysis() {
     });
     const data = await parseJsonSafe(r);
     if (!r.ok) {
-      if (r.status === 403) {
-        showFreemiumLimit();
-        throw new Error(data.error);
-      }
       throw new Error(data.error || 'Server error'); 
     }
     S.jobId = data.job_id;
@@ -261,211 +265,6 @@ async function startAnalysis() {
     pollJob(S.jobId);
   } catch (e) {
     showError(e.message);
-  }
-}
-
-function showFreemiumLimit() {
-  resetUI();
-  showUpgradeModal();
-}
-
-function showUpgradeModal() {
-  // Remove existing modal if any
-  const existing = document.getElementById('upgradeModal');
-  if (existing) existing.remove();
-
-  const modal = document.createElement('div');
-  modal.id = 'upgradeModal';
-  modal.className = 'upgrade-modal';
-  modal.innerHTML = `
-    <div class="upgrade-overlay"></div>
-    <div class="upgrade-box">
-      <div class="upgrade-header">
-        <span class="upgrade-icon">🔒</span>
-        <h2>Free Limit Reached</h2>
-      </div>
-      <div class="upgrade-body">
-        <p>You've used all <strong>3 free analyses</strong>.</p>
-        <p>Upgrade to Premium for:</p>
-        <ul class="upgrade-perks">
-          <li>✓ Unlimited analyses</li>
-          <li>✓ Priority processing</li>
-          <li>✓ Advanced insights</li>
-          <li>✓ Export to PDF</li>
-        </ul>
-      </div>
-      <div class="upgrade-actions">
-        <button class="upgrade-btn-primary" onclick="simulateUpgrade()">
-          <span>Upgrade to Premium</span>
-          <span class="upgrade-price">$9.99/mo</span>
-        </button>
-        <button class="upgrade-btn-secondary" onclick="closeUpgradeModal()">
-          Maybe Later
-        </button>
-      </div>
-    </div>
-  `;
-
-  // Add styles
-  const style = document.createElement('style');
-  style.id = 'upgradeModalStyle';
-  style.textContent = `
-    .upgrade-modal {
-      position: fixed;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      z-index: 9999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .upgrade-overlay {
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      background: rgba(0, 0, 0, 0.8);
-      backdrop-filter: blur(4px);
-    }
-    .upgrade-box {
-      position: relative;
-      background: linear-gradient(135deg, rgba(30, 30, 40, 0.98), rgba(20, 20, 30, 0.98));
-      border: 1px solid rgba(168, 85, 247, 0.3);
-      border-radius: 24px;
-      padding: 40px;
-      max-width: 420px;
-      width: 90%;
-      box-shadow: 0 25px 80px rgba(168, 85, 247, 0.2);
-      animation: upgradeSlideIn 0.3s ease-out;
-    }
-    @keyframes upgradeSlideIn {
-      from { opacity: 0; transform: translateY(20px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    .upgrade-header {
-      text-align: center;
-      margin-bottom: 24px;
-    }
-    .upgrade-icon {
-      font-size: 3rem;
-      display: block;
-      margin-bottom: 12px;
-    }
-    .upgrade-header h2 {
-      font-family: 'Familjen Grotesk', sans-serif;
-      font-size: 1.8rem;
-      font-weight: 700;
-      color: white;
-      margin: 0;
-    }
-    .upgrade-body {
-      color: rgba(255, 255, 255, 0.8);
-      font-size: 0.95rem;
-      line-height: 1.6;
-      margin-bottom: 28px;
-    }
-    .upgrade-body strong {
-      color: #f472b6;
-    }
-    .upgrade-perks {
-      list-style: none;
-      padding: 0;
-      margin: 16px 0 0 0;
-      background: rgba(168, 85, 247, 0.1);
-      border-radius: 12px;
-      padding: 20px;
-    }
-    .upgrade-perks li {
-      padding: 6px 0;
-      color: #a78bfa;
-    }
-    .upgrade-actions {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .upgrade-btn-primary {
-      background: linear-gradient(135deg, #a855f7, #c084fc);
-      color: white;
-      border: none;
-      border-radius: 12px;
-      padding: 16px 24px;
-      font-size: 1rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .upgrade-btn-primary:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 10px 30px rgba(168, 85, 247, 0.4);
-    }
-    .upgrade-price {
-      background: rgba(0, 0, 0, 0.2);
-      padding: 4px 12px;
-      border-radius: 20px;
-      font-size: 0.85rem;
-    }
-    .upgrade-btn-secondary {
-      background: transparent;
-      color: rgba(255, 255, 255, 0.6);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 12px;
-      padding: 14px 24px;
-      font-size: 0.95rem;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    .upgrade-btn-secondary:hover {
-      border-color: rgba(255, 255, 255, 0.4);
-      color: rgba(255, 255, 255, 0.8);
-    }
-  `;
-
-  document.body.appendChild(style);
-  document.body.appendChild(modal);
-}
-
-function closeUpgradeModal() {
-  const modal = document.getElementById('upgradeModal');
-  const style = document.getElementById('upgradeModalStyle');
-  if (modal) modal.remove();
-  if (style) style.remove();
-}
-
-async function simulateUpgrade() {
-  const btn = document.querySelector('.upgrade-btn-primary');
-  if (btn) { btn.disabled = true; btn.innerHTML = `<span>Upgrading...</span>`; }
-
-  try {
-    const r = await fetch(getBase() + '/api/upgrade', {
-      method: 'POST',
-      headers: getHeaders()
-    });
-    const data = await parseJsonSafe(r);
-    if (!r.ok) throw new Error(data.error || 'Upgrade request failed');
-
-    if (S.user) {
-      S.user.tier = 'premium';
-      localStorage.setItem('user', JSON.stringify(S.user));
-    }
-    if (btn) {
-      btn.innerHTML = `<span>✓ Upgrade Complete!</span>`;
-      btn.style.background = 'linear-gradient(135deg, #22c55e, #4ade80)';
-    }
-
-    setTimeout(() => {
-      closeUpgradeModal();
-      toast('🎉', 'Welcome to Premium! Unlimited analyses unlocked.');
-      updateUserUI();
-      if (document.getElementById('resultsWrap').classList.contains('show')) {
-        window.location.reload();
-      }
-    }, 1000);
-  } catch (err) {
-    if (btn) { btn.disabled = false; btn.innerHTML = `<span>Upgrade to Premium</span><span class="upgrade-price">$9.99/mo</span>`; }
-    toast('❌', 'Upgrade failed: ' + err.message);
   }
 }
 
@@ -514,17 +313,9 @@ function initWebSocket() {
       console.log('📍 WebSocket job_status:', data);
       updateAgentBoard(data);
       
-      // Store metadata for freemium truncation
-      if (data.is_truncated !== undefined) {
-        S.jobMetadata = S.jobMetadata || {};
-        S.jobMetadata.is_truncated = data.is_truncated;
-      }
-      
       if (data.status === 'complete') {
         clearInterval(S.pollInterval);
         S.results = data.results;
-        S.jobMetadata = S.jobMetadata || {};
-        S.jobMetadata.is_truncated = data.is_truncated || false;
         renderResults();
       } else if (data.status === 'error') {
         clearInterval(S.pollInterval);
@@ -550,22 +341,14 @@ function initWebSocket() {
 
 async function pollJob(jid) {
   try {
-    const r = await fetch(getBase() + `/status/${jid}`, { headers: getHeaders() });
+    const r = await fetch(getBase() + `/status/${jid}`, { headers: getHeaders(), signal: AbortSignal.timeout(10000) });
     const d = await parseJsonSafe(r);
     if (!r.ok) throw new Error(d.error || `Status ${r.status}`);
     updateAgentBoard(d);
     
-    // Phase 3-4: Store metadata for freemium truncation
-    if (d.is_truncated !== undefined) {
-      S.jobMetadata = S.jobMetadata || {};
-      S.jobMetadata.is_truncated = d.is_truncated;
-    }
-    
     if (d.status === 'complete') { 
       clearInterval(S.pollInterval); 
       S.results = d.results;
-      S.jobMetadata = S.jobMetadata || {};
-      S.jobMetadata.is_truncated = d.is_truncated || false;
       renderResults(); 
     }
     else if (d.status === 'error') { 
@@ -604,22 +387,14 @@ async function loadArchivedJob(jid) {
   S.jobId = jid;
   
   try {
-    const r = await fetch(getBase() + `/status/${jid}`, { headers: getHeaders() });
+    const r = await fetch(getBase() + `/status/${jid}`, { headers: getHeaders(), signal: AbortSignal.timeout(10000) });
     const d = await parseJsonSafe(r);
     if (!r.ok) throw new Error(d.error || 'Failed to load report');
     
     updateAgentBoard(d);
     
-    // Store metadata for freemium truncation
-    if (d.is_truncated !== undefined) {
-      S.jobMetadata = S.jobMetadata || {};
-      S.jobMetadata.is_truncated = d.is_truncated;
-    }
-    
     if (d.status === 'complete') {
       S.results = d.results;
-      S.jobMetadata = S.jobMetadata || {};
-      S.jobMetadata.is_truncated = d.is_truncated || false;
       renderResults();
     } else if (d.status === 'error') {
       showError(d.message);
@@ -646,7 +421,7 @@ async function downloadReport() {
   }
   if (!S.jobId) return;
   try {
-    const r = await fetch(getBase() + `/report/${S.jobId}`, { headers: getHeaders() });
+    const r = await fetch(getBase() + `/report/${S.jobId}`, { headers: getHeaders(), signal: AbortSignal.timeout(15000) });
     // Report endpoint returns text/plain on success, JSON on error
     const ct = (r.headers.get('content-type') || '').toLowerCase();
     if (!r.ok) {

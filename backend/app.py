@@ -312,16 +312,15 @@ def handle_disconnect(*args):
 
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 
-DEFAULT_MODEL  = "llama-3.3-70b-versatile"
+DEFAULT_MODEL  = "openai/gpt-oss-120b"
 RETRY_DELAY    = 8
 RETRY_ATTEMPTS = 3
 
 AVAILABLE_MODELS = [
-    {"id": "llama-3.3-70b-versatile", "label": "LLaMA 3.3 70B",  "tag": "Best"},
-    {"id": "llama-3.1-8b-instant",    "label": "LLaMA 3.1 8B",   "tag": "Fast"},
-    {"id": "gemma2-9b-it",            "label": "Gemma 2 9B",      "tag": "Light"},
-    {"id": "mixtral-8x7b-32768",      "label": "Mixtral 8x7B",    "tag": "Long ctx"},
-    {"id": "llama3-70b-8192",         "label": "LLaMA 3 70B",     "tag": "Stable"},
+    {"id": "openai/gpt-oss-120b",   "label": "GPT-OSS 120B",     "tag": "Best"},
+    {"id": "openai/gpt-oss-20b",    "label": "GPT-OSS 20B",      "tag": "Fast"},
+    {"id": "qwen/qwen3.8-27b",      "label": "Qwen 3.8 27B",     "tag": "Balanced"},
+    {"id": "allam-2-7b",            "label": "ALLaM 2 7B",       "tag": "Light"},
 ]
 
 jobs: dict = {}
@@ -1319,43 +1318,7 @@ Mindset note:
 
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-#  FREEMIUM TRUNCATION HELPER (Phase 3)
-# ════════════════════════════════════════════════════════════════════════════════
-
-def truncate_agent_output(text: str, percentage: int = 70) -> str:
-    """
-    Truncate text to keep only the first (100 - percentage)% of content.
-    For 70% truncation, keep first 30%.
-    Adds a truncation marker at the end.
-    """
-    if not text:
-        return text
-    
-    lines = text.split('\n')
-    keep_lines = max(1, len(lines) * (100 - percentage) // 100)
-    truncated = '\n'.join(lines[:keep_lines])
-    truncated += f"\n\n[...TRUNCATED FOR FREE TIER - Upgrade to Premium to see full {keep_lines}/{len(lines)} lines...]"
-    return truncated
-
-
-def truncate_agent_outputs(results: dict, percentage: int = 70) -> dict:
-    """
-    Truncate all agent outputs (a1-a6) for free tier users.
-    """
-    truncated_results = {}
-    for agent_id, content in results.items():
-        if agent_id in ["a1", "a2", "a3", "a4", "a5", "a6"]:
-            truncated_results[agent_id] = truncate_agent_output(content, percentage)
-        else:
-            truncated_results[agent_id] = content
-    return truncated_results
-
-
-# ════════════════════════════════════════════════════════════════════════════════
-#  BACKGROUND JOB RUNNER
-# ════════════════════════════════════════════════════════════════════════════════
-
+# ════════════════════════════════════════════════════════════════════════════
 def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
     if job_id not in jobs:
         jobs[job_id] = {
@@ -1366,7 +1329,7 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
         }
     job = jobs[job_id]
     
-    def update_status(status_str, progress_val, msg_str, results_dict=None, report_str=None, is_truncated_val=False, inc_analyses_used=False):
+    def update_status(status_str, progress_val, msg_str, results_dict=None, report_str=None):
         job["status"] = status_str
         job["progress"] = progress_val
         job["message"] = msg_str
@@ -1374,31 +1337,20 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
         if report_str is not None: job["report"] = report_str
         job["agents"] = get_agents_status(progress_val, status_str, msg_str)
         
-        is_truncated_emit = False
         try:
             with app.app_context():
                 job_db = Job.query.filter_by(id=job_id).first()
-                user = User.query.filter_by(id=user_id).first()
                 if job_db:
                     job_db.status = status_str
                     job_db.progress = progress_val
                     job_db.current_message = msg_str
                     if results_dict is not None: job_db.results_json = json.dumps(results_dict)
                     if report_str is not None: job_db.report_content = report_str
-                    if is_truncated_val: job_db.is_truncated = True
                     
-                    # Increment free use ONLY on successful completion!
-                    if inc_analyses_used and user and user.subscription_tier == 'free':
-                        user.free_analyses_used += 1
-                        
                     if status_str == 'complete':
                         job_db.analysis_number = Job.query.filter_by(user_id=user_id).count()
-                        job_db.user_tier_at_time = user.subscription_tier if user else 'free'
                     
-                    is_truncated_emit = bool(job_db.is_truncated)
                     db.session.commit()
-                else:
-                    is_truncated_emit = is_truncated_val
         except Exception as e:
             logging.error(f"[update_status] DB commit failed for {job_id}: {e}\n{traceback.format_exc()}")
             try:
@@ -1406,8 +1358,7 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
                     db.session.rollback()
             except Exception:
                 pass
-            is_truncated_emit = is_truncated_val
-                
+            
         # Emit SocketIO update — never let emit crash the job (threading mode)
         try:
             socketio.emit('job_status', {
@@ -1416,8 +1367,7 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
                 'progress': progress_val,
                 'message': msg_str,
                 'agents': job["agents"],
-                'results': results_dict,
-                'is_truncated': is_truncated_emit
+                'results': results_dict
             }, room=job_id)
         except Exception as e:
             logging.warning(f"[socketio] emit failed for {job_id}: {e}")
@@ -1467,20 +1417,7 @@ def run_job(job_id, user_id, c_pdf, h_pdf, role, model):
         (REPORTS_FOLDER / f"{job_id}.txt").write_text(report, encoding="utf-8")
         job_results = {"a1":r1,"a2":r2,"a3":r3,"a4":r4,"a5":r5,"a6":r6}
 
-        # Truncation logic (Phase 3)
-        with app.app_context():
-            user = User.query.filter_by(id=user_id).first()
-            analysis_count = Job.query.filter_by(user_id=user_id).count()
-            is_free_tier = user and user.subscription_tier == 'free'
-            is_second_plus = analysis_count >= 2
-            is_truncated = False
-            results_to_save = job_results
-            
-            if is_free_tier and is_second_plus:
-                results_to_save = truncate_agent_outputs(job_results, percentage=70)
-                is_truncated = True
-
-        update_status("complete", 6, "Analysis complete.", results_dict=results_to_save, report_str=report, is_truncated_val=is_truncated, inc_analyses_used=True)
+        update_status("complete", 6, "Analysis complete.", results_dict=job_results, report_str=report)
 
     except Exception as e:
         tb = traceback.format_exc()
@@ -1666,7 +1603,7 @@ def login():
         
         return jsonify({
             'token': token,
-            'user': {'email': user.email, 'id': user.id, 'tier': user.subscription_tier},
+            'user': {'email': user.email, 'id': user.id},
             'request_id': g.request_id
         })
     except OperationalError as oe:
@@ -1692,24 +1629,8 @@ def login():
 def get_me(current_user):
     return jsonify({
         'email': current_user.email,
-        'tier': current_user.subscription_tier,
-        'free_analyses_used': current_user.free_analyses_used
+        'id': current_user.id
     })
-
-@app.route("/api/upgrade", methods=["POST"])
-@token_required
-def upgrade_user(current_user):
-    try:
-        current_user.subscription_tier = 'premium'
-        db.session.commit()
-        return jsonify({
-            'message': 'Upgraded to premium successfully!',
-            'tier': current_user.subscription_tier,
-            'request_id': g.request_id
-        })
-    except Exception as e:
-        db.session.rollback()
-        return _error_response("INTERNAL_ERROR", "Failed to upgrade", detail=str(e)), 500
 
 @app.route("/api/my-reports", methods=["GET"])
 @token_required
@@ -1726,10 +1647,6 @@ def get_my_reports(current_user):
 @app.route("/analyse", methods=["POST"])
 @token_required
 def analyse(current_user):
-    # Freemium Check
-    if current_user.subscription_tier == 'free' and current_user.free_analyses_used >= 3:
-        return _error_response("FORBIDDEN", "Free limit reached. Please upgrade to premium.", status=403)
-
     if "candidate_pdf" not in request.files or "hr_pdf" not in request.files:
         return _error_response("VALIDATION_ERROR", "Both candidate_pdf and hr_pdf required.")
 
@@ -1799,7 +1716,6 @@ def job_status(current_user, jid):
         "job_role": job_db.job_role,
         "model": job_db.model,
         "agents": get_agents_status(job_db.progress, job_db.status, job_db.current_message),
-        "is_truncated": job_db.is_truncated
     }
     
     if job_db.status == 'complete' and job_db.results_json:

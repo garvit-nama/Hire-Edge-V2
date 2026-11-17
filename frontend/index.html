@@ -15,7 +15,6 @@
   <link rel="stylesheet" href="css/components.css" />
   <link rel="stylesheet" href="css/results.css" />
   <link rel="stylesheet" href="css/animations.css" />
-  <link rel="stylesheet" href="css/freemium.css" />
 </head>
 
 <body>
@@ -174,14 +173,14 @@
       <div class="model-row">
         <span class="field-lbl">AI Model — Groq</span>
         <div class="model-chips" id="modelChips">
-          <button class="mchip active" data-model="llama-3.3-70b-versatile" onclick="pickModel(this)">LLaMA 3.3 70B
+          <button class="mchip active" data-model="openai/gpt-oss-120b" onclick="pickModel(this)">GPT-OSS 120B
             <span class="mchip-tag">Best</span></button>
-          <button class="mchip" data-model="llama-3.1-8b-instant" onclick="pickModel(this)">LLaMA 3.1 8B <span
+          <button class="mchip" data-model="openai/gpt-oss-20b" onclick="pickModel(this)">GPT-OSS 20B <span
               class="mchip-tag">Fast</span></button>
-          <button class="mchip" data-model="gemma2-9b-it" onclick="pickModel(this)">Gemma 2 9B <span
+          <button class="mchip" data-model="qwen/qwen3.8-27b" onclick="pickModel(this)">Qwen 3.8 27B <span
+              class="mchip-tag">Balanced</span></button>
+          <button class="mchip" data-model="allam-2-7b" onclick="pickModel(this)">ALLaM 2 7B <span
               class="mchip-tag">Light</span></button>
-          <button class="mchip" data-model="mixtral-8x7b-32768" onclick="pickModel(this)">Mixtral 8×7B <span
-              class="mchip-tag">Long ctx</span></button>
         </div>
       </div>
 
@@ -287,6 +286,13 @@
 
   </section>
 
+  <!-- Footer -->
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div id="footerAuth"></div>
+    </div>
+  </footer>
+
   <!-- Toast -->
   <div class="toast" id="toast">
     <span id="toastIcon">✅</span>
@@ -294,9 +300,6 @@
   </div>
 
   <!-- Phase 5: Socket.IO client for real-time WebSocket updates -->
-<script>
-    window.BACKEND_URL = 'https://hireedge-backend.onrender.com';
-  </script>
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   
   <script src="js/state.js"></script>
