@@ -197,7 +197,7 @@ def _db_host_log(url: str) -> str:
         return "unknown"
 
 # Allow explicit SQLite fallback when Postgres is unreachable (useful for local dev if Supabase paused)
-ALLOW_SQLITE_FALLBACK = os.environ.get("ALLOW_SQLITE_FALLBACK", "false").lower() in ("true", "1", "yes")
+ALLOW_SQLITE_FALLBACK = os.environ.get("ALLOW_SQLITE_FALLBACK", "true").lower() in ("true", "1", "yes")
 
 db.init_app(app)
 
